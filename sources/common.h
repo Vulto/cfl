@@ -99,7 +99,7 @@ int getNumberOfBookmarks(void);
 void displayBookmarks(void);
 void openBookmarkDir(char secondKey);
 int bookmarkExists(char bookmark);
-void addBookmark(char bookmark, char *path);
+//void addBookmark(char bookmark, char *path);
 void setSelectionCount(void);
 void handleFlags(char** directories);
 
@@ -149,4 +149,9 @@ void renameFiles(char *directories);
 
 void goShell(pid_t pid);
 
-// void Select(char *directories[selection], char* dir);
+void Deleting(void);
+
+void ShowBookMark(void);
+
+void AddBookMark(void);
+

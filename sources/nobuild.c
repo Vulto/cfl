@@ -9,26 +9,27 @@
 #define MAINOBJ "obj/main.o"
 #define FUNCOBJ "obj/functions.o"
 #define PREVOBJ "obj/preview.o"
-#define KEYBOARDOBJ "obj/keyboard.o"
 
 #define BIN "../cfl"
+#define MAN "../cfl.1"
+#define SCRIPTS "../scripts/"
 
 #define PREFIX "/usr/local/bin/"
 
 #define CFLAGS  "-Wall",                    \
-                "-Wextra",                  \
-                "-Wfatal-errors",           \
-                "-pedantic",                \
-                "-pedantic-errors",         \
-                "-Wmissing-include-dirs",   \
-                "-Wunused-variable",        \
-                "-std=c23",                 \
-                "-O3",                      \
-                "-D_POSIX_C_SOURCE=200809L"
+"-Wextra",                  \
+"-Wfatal-errors",           \
+"-pedantic",                \
+"-pedantic-errors",         \
+"-Wmissing-include-dirs",   \
+"-Wunused-variable",        \
+"-std=c23",                 \
+"-O3",                      \
+"-D_POSIX_C_SOURCE=200809L"
 
 #define OLD "c.old"
 
-#define LIBS "-lncurses", "-lmagic"
+#define LIBS "-lncursesw", "-lmagic"
 
 char *cc(void) {
     char *result = getenv("CC");
@@ -36,24 +37,26 @@ char *cc(void) {
 }
 
 void Compile(void) {
+    CMD("mkdir", "-p", "obj");
+    CMD("doas", "mkdir", "-p", "/usr/share/man/man1/cfl");
+    CMD("doas", "mkdir", "-p", "/usr/share/cfl");
     CMD(cc(), "-c", MAIN, CFLAGS, "-o", MAINOBJ);
     CMD(cc(), "-c", FUNCTIONS, CFLAGS, "-o", FUNCOBJ);
-    CMD(cc(), "-c", PREVIEW, CFLAGS, "-o", PREVOBJ);
-    CMD(cc(), "-c", KEYBOARD, CFLAGS, "-o", KEYBOARDOBJ);
 }
 
 void Link(void) {
-    CMD(cc(), "-o", BIN, MAINOBJ, FUNCOBJ, PREVOBJ, KEYBOARDOBJ, LIBS);
+    CMD(cc(), "-o", BIN, MAINOBJ, FUNCOBJ, PREVIEW, LIBS);
     return;
 }
 
 void Install(void) {
+    CMD("doas", "cp", "-f", MAN, "/usr/share/man/man1");
+    CMD("doas", "cp", "-rf", SCRIPTS, "/usr/share/cfl/");
     CMD("doas", "cp", "-f", BIN, PREFIX);
 }
 
 void Wipe(void) {
-    CMD("rm", "-v", BIN);
-    CMD("rm", OLD);
+    CMD("rm", "-vr", BIN, OLD);
 }
 
 int main(int argc, char *argv[]) {
@@ -71,11 +74,11 @@ int main(int argc, char *argv[]) {
             for (unsigned long int j = 1; j < strlen(arg); j++) {
 
                 switch (arg[j]) {
-                    case 'c': Compile();  break;
-                    case 'l': Link();     break;
-                    case 'i': Install();	break;
-                    case 'w': Wipe();     break;
-                    default: printf("Unknown option: %c\n", arg[j]);
+                    case 'c': Compile(); break;
+                    case 'l': Link();    break;
+                    case 'i': Install(); break;
+                    case 'w': Wipe();    break;
+                        default: printf("Unknown option: %c\n", arg[j]);
                     break;
                 }
             }

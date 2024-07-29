@@ -1,8 +1,11 @@
+
+#define CONFIRM_ON_DEL 0 
+
 // Display Image Script
-#define DISPLAYIMG "/usr/share/cfiles/scripts/displayimg_uberzug"
+#define DISPLAYIMG "/home/vulto/.config/cfl/scripts/"
 
 // Clear Image Preview Script
-#define CLEARIMG "/usr/share/cfiles/scripts/clearimg_uberzug"
+#define CLEARIMG "/home/vulto/.config/cfl/scripts/"
 
 // Set to 1 if you want to see hidden files on startup
 #define SHOW_HIDDEN 0

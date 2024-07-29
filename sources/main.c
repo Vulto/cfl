@@ -163,6 +163,7 @@ int main(int argc, char* argv[]) {
             printf("%s\n", "Couldn't allocate memory!");
             exit(1);
         }
+
         if(strcasecmp(dir,"/") == 0) {
             snprintf(next_dir,allocSize+1,"%s%s", dir, directories[selection]);
         } else {
@@ -242,8 +243,6 @@ int main(int argc, char* argv[]) {
 
         int fd = 0;
         int pfd[2];
-
-        char confirm;
 
         switch( ch = wgetch(current_win) ){
             case KEY_NAVUP:
@@ -357,57 +356,16 @@ int main(int argc, char* argv[]) {
 
             case KEY_REMOVEMENU:
                 clearImg();
-                if( fileExists(clipboard_path) == 1 ) {
-                    keys_win = createNewWin(3, maxx, maxy-3, 0);
-                    wprintw(keys_win,"Key\tCommand");
-                    wprintw(keys_win,"\n%c\tMove to Garbage Can", KEY_GARBAGE);
-                    wprintw(keys_win,"\n%c\tDelete", KEY_DELETE);
-                    wrefresh(keys_win);
-                    secondKey = wgetch(current_win);
-                    delwin(keys_win);
-                    if(secondKey == KEY_GARBAGE) {
-                        moveFiles(trash_path);
-                    } else if( secondKey == KEY_DELETE ) {
-                        displayAlert("Confirm (y/n): ");
-                        confirm = wgetch(status_win);
-                        if(confirm == 'y') {
-                            removeFiles();
-                            selectedFiles = 0;
-                        } else {
-                            displayAlert("ABORTED");
-                            sleep(1);
-                        }
-                    }
-                } else {
-                    displayAlert("Select some files first!");
-                    sleep(1);
-                }
+                Deleting(); 
                 break;
             case KEY_BOOKMARK:
                 clearImg();
-                len_bookmarks = getNumberOfBookmarks();
-                if( len_bookmarks == -1 ) {
-                    displayAlert("No Bookmarks Found!");
-                    sleep(1);
-                } else {
-                    keys_win = createNewWin(len_bookmarks+1, maxx, maxy-len_bookmarks, 0);
-                    displayBookmarks();
-                    secondKey = wgetch(keys_win);
-                    openBookmarkDir(secondKey);
-                    delwin(keys_win);
-                }
+                ShowBookMark();
                 break;
 
             case KEY_ADDBOOKMARK:
                 clearImg();
-                displayAlert("Enter Bookmark Key");
-                secondKey = wgetch(status_win);
-                if( bookmarkExists(secondKey) == 1 ){
-                    displayAlert("Bookmark Key Exists!");
-                    sleep(1);
-                } else {
-                    addBookmark(secondKey, dir);
-                }
+                AddBookMark();
                 break;
 
             case KEY_RMBOOKMARK:

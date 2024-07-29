@@ -354,7 +354,7 @@ void init(int argc, char* argv[]) {
 
 // Checks if a file exists
 int fileExists(char *file) {
-    if( access( file, F_OK ) != -1 ) {
+    if( access ( file, F_OK ) != -1 ) {
         return EXIT_FAILURE;
     } else {
         return EXIT_SUCCESS;
@@ -374,7 +374,7 @@ int getNumberOfBookmarks(void) {
         exit(1);
     }
     int num = 0;
-    while(fgets(buf, PATH_MAX, (FILE*) fp)) {
+    while( fgets ( buf, PATH_MAX, ( FILE* ) fp)) {
         num++;
     }
     free(buf);
@@ -1212,35 +1212,60 @@ void goShell(pid_t pid) {
     selection = 0;
 }
 
-#if 0
-void Select(char *directories[selection], char *dir) {
-    free(temp_dir);
-    int allocSize = snprintf(NULL, 0, "%s/%s", dir, directories[selection]);
-    
-    char *tempDir = malloc(allocSize + 2);
-    if (tempDir == NULL) {
-        endwin();
-        printf("Couldn't allocate memory!\n");
-        exit(1);
-    }
-
-    snprintf(tempDir, allocSize + 2, "%s/%s", dir, directories[selection]);
-    
-    char *temp = strdup(tempDir);
-    if (temp == NULL) {
-        free(tempDir); // Free tempDir to prevent memory leak before exiting
-        endwin();
-        printf("Couldn't allocate memory!\n");
-        exit(1);
-    }
-    
-    if (checkClipboard(tempDir) == 1) {
-        removeClipboard(replace(temp, "\n", "//"));
-        selectedFiles--;
-    } else {
-        writeClipboard(replace(temp, "\n", "//"));
-        selectedFiles++;
-    }
-    free(temp);
-}
+void Deleting(void) {
+    if( fileExists(clipboard_path) == 1 ) {
+        keys_win = createNewWin(3, maxx, maxy-3, 0);
+        wprintw(keys_win,"Key\tCommand");
+        wprintw(keys_win,"\n%c\tMove to Garbage Can", KEY_GARBAGE);
+        wprintw(keys_win,"\n%c\tDelete", KEY_DELETE);
+        wrefresh(keys_win);
+        secondKey = wgetch(current_win);
+        delwin(keys_win);
+        if(secondKey == KEY_GARBAGE) {
+            moveFiles(trash_path);
+        } else if( secondKey == KEY_DELETE ) {
+#if CONFIRM_ON_DEL
+            displayAlert("Confirm (y/n): ");
+            char confirm = wgetch(status_win);
+            if(confirm == 'y') {
+                removeFiles();
+                selectedFiles = 0;
+            } else {
+                displayAlert("ABORTED");
+                sleep(1);
+            }
+#else
+            removeFiles();
+            selectedFiles = 0;
 #endif
+        }
+    } else {
+        displayAlert("Select some files first!");
+        sleep(1);
+    }
+}
+
+void ShowBookMark(void) {
+    len_bookmarks = getNumberOfBookmarks();
+    if( len_bookmarks == -1 ) {
+        displayAlert("No Bookmarks Found!");
+        sleep(1);
+    } else {
+        keys_win = createNewWin(len_bookmarks+1, maxx, maxy-len_bookmarks, 0);
+        displayBookmarks();
+        secondKey = wgetch(keys_win);
+        openBookmarkDir(secondKey);
+        delwin(keys_win);
+    }
+}
+
+void AddBookMark(void) {
+    displayAlert("Enter Bookmark Key");
+    secondKey = wgetch(status_win);
+    if( bookmarkExists(secondKey) == 1 ){
+        displayAlert("Bookmark Key Exists!");
+        sleep(1);
+    } else {
+        addBookmark(secondKey, dir);
+    }
+}
