@@ -1,20 +1,21 @@
+//config.h
 
-#define CONFIRM_ON_DEL 0 
+#define CONFIRM_ON_DEL false 
+
+// Set to 1 if you want to see hidden files on startup
+#define SHOW_HIDDEN false
+
+// Set to 0 if you don't want to see number of selected files in the statusbar
+#define SHOW_SELECTION_COUNT true
+
+// Set to 0 if you don't want to see PDF Previews (previews are broken)
+#define SHOW_PDF_PREVIEWS false
 
 // Display Image Script
 #define DISPLAYIMG "/home/vulto/.config/cfl/scripts/"
 
 // Clear Image Preview Script
 #define CLEARIMG "/home/vulto/.config/cfl/scripts/"
-
-// Set to 1 if you want to see hidden files on startup
-#define SHOW_HIDDEN 0
-
-// Set to 0 if you don't want to see number of selected files in the statusbar
-#define SHOW_SELECTION_COUNT 1
-
-// Set to 0 if you don't want to see PDF Previews (previews are broken)
-#define SHOW_PDF_PREVIEWS 0
 
 // Program used to open non-text file (Eg: `xdg-open` or `thunar`)
 #define FILE_OPENER "nopen"
@@ -74,13 +75,13 @@
 #define KEY_RENAME 'R'
 
 // For getting an option to either move the file to trash or delete it
-#define KEY_REMOVEMENU 'x'
+#define KEY_REMOVEMENU 'd'
 
 // For moving the file to trash after pressing KEY_REMOVEMENU
 #define KEY_GARBAGE 'g'
 
 // For removing the file after pressing KEY_REMOVEMENU
-#define KEY_DELETE 'z'
+#define KEY_DELETE 'd'
 
 // View file info
 #define KEY_INFO 'i'

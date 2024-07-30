@@ -37,6 +37,24 @@ void getMIME(const char *filepath, char mime[50]) {
     }
 }
 
+
+
+
+/* Gets the last token from temp_dir by using `tokenizer` as a delimeter */
+void getLastToken(char *tokenizer) {
+    pch = strtok(temp_dir, tokenizer);
+    while (pch != NULL) {
+        free(last);
+        last = strdup(pch);
+        if(last == NULL) {
+            endwin();
+            printf("%s\n", "Couldn't allocate memory!");
+            exit(1);
+        }
+        pch = strtok(NULL,tokenizer);
+    }
+}
+
 void getFileType(char *filepath) {
     allocSize = snprintf(NULL,0,"%s",filepath);
     temp_dir = malloc(allocSize+1);
@@ -135,30 +153,14 @@ void getPreview(char *filepath, int maxy, int maxx) {
         strcasecmp("png",last) == 0 ||
         strcasecmp("gif",last) == 0 ||
         strcasecmp("jpeg",last) == 0) {
-        getImgPreview(filepath, maxy, maxx);
+        GenImgPreview(filepath, maxy, maxx);
         clearFlagImg = 1;
     } else {
         getTextPreview(filepath, maxx);
     }
 }
 
-/* Gets the last token from temp_dir by using `tokenizer` as a delimeter */
-void getLastToken(char *tokenizer) {
-    pch = strtok(temp_dir, tokenizer);
-    while (pch != NULL) {
-        free(last);
-        last = strdup(pch);
-        if(last == NULL) {
-            endwin();
-            printf("%s\n", "Couldn't allocate memory!");
-            exit(1);
-        }
-        pch = strtok(NULL,tokenizer);
-    }
-}
-
-
-void getImgPreview(char *filepath,  int maxy, int maxx) {
+void GenImgPreview(char *filepath,  int maxy, int maxx) {
     pid_t pid;
     pid = fork();
 
@@ -243,53 +245,52 @@ void viewPreview(void) {
     refresh();
 }
 
-
 void clearImg() {
-        // Store arguments for CLEARIMG script
-        char arg1[5];
-        char arg2[5];
-        char arg3[5];
-        char arg4[5];
+    pid_t pid;
+    pid = fork();
 
-        // Convert numerical arguments to strings
-        snprintf(arg1,5,"%d",maxx/2+2);
-        snprintf(arg2,5,"%d",2);
-        snprintf(arg3,5,"%d",maxx/2-3);
-        snprintf(arg4,5,"%d",maxy+5);
-
-        pid_t pid;
-        pid = fork();
-
-        if(pid == 0) {
-            execl(CLEARIMG,CLEARIMG,arg1,arg2,arg3,arg4,(char *)NULL);
-            exit(1);
-        }
+    if(pid == 0) {
+        execl(CLEARIMG,CLEARIMG, (char *)NULL);
+        exit(1);
+    }
 }
 
 void openFile(char *filepath) {
-    char mime[50];
-    getMIME(filepath, mime);
-    mime[strcspn(mime, "\n")] = 0;
-    if((strcmp(mime,"text") == 0) || (strcmp(mime, "application/x-shellscript") == 0)) {
-        endwin();
-        sigprocmask(SIG_BLOCK, &x, NULL);
-        pid_t pid;
-        pid = fork();
-        if (pid == 0) {
-            execlp(editor, editor, filepath, (char *)0);
-            exit(1);
-        } else {
-            int status;
-            waitpid(pid, &status, 0);
-            return;
-        }
-    }
+    sigprocmask(SIG_BLOCK, &x, NULL);
     pid_t pid;
     pid = fork();
     if (pid == 0) {
         int null_fd = open("/dev/null", O_WRONLY);
         dup2(null_fd,2);
-        execlp(FILE_OPENER, FILE_OPENER, filepath, (char *)0);
+        execlp(FILE_OPENER, FILE_OPENER, filepath);
         exit(1);
+    } else {
+        endwin();
+        int status;
+        waitpid(pid, &status, 0);
+        return;
+    }
+}
+
+void PreviewNextDir(char *next_dir, char **next_directories) {
+    for(int i=0; i<len_preview; i++ ) {
+        if(i == maxy - 1)
+            break;
+        wmove(preview_win,i+1,2);
+        free(temp_dir);
+        allocSize = snprintf(NULL,0,"%s/%s", next_dir, next_directories[i]);
+        temp_dir = malloc(allocSize+1);
+        if(temp_dir == NULL) {
+            endwin();
+            printf("%s\n", "Couldn't allocate memory!");
+            exit(1);
+        }
+        snprintf(temp_dir, allocSize+1, "%s/%s", next_dir, next_directories[i]);
+        if( isRegularFile(temp_dir) == 0 ){
+            wattron(preview_win, A_BOLD);
+        } else {
+            wattroff(preview_win, A_BOLD);
+        }
+        wprintw(preview_win, "%.*s\n", maxx/2 - 3, next_directories[i]);
     }
 }

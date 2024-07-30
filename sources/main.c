@@ -65,7 +65,7 @@ int main(int argc, char* argv[]) {
         int status;
         status = getFiles(dir, directories);
 
-        if( status == -1 ){
+        if( status == -1 ) {
             endwin();
             printf("Couldn't open \'%s\'", dir);
             exit(1);
@@ -96,71 +96,72 @@ int main(int argc, char* argv[]) {
         initWindows();
 
         int t = 0;
-        for( i=start; i<len; i++ ) {
-            if(t == maxy -1)
+        for( i = start ; i < len ; i++, t++ ) {
+            if( t == maxy -1 ) {
                 break;
-            free(temp_dir);
-            allocSize = snprintf(NULL,0,"%s/%s",dir,directories[i]);
-            temp_dir = malloc(allocSize + 1);
-            if(temp_dir == NULL){
+            };
+
+            free( temp_dir );
+            allocSize = snprintf( NULL,0,"%s/%s",dir,directories[i] );
+            temp_dir = malloc(allocSize + 1 );
+            if( temp_dir == NULL ) {
                 endwin();
                 printf("%s\n", "Couldn't allocate memory!");
                 exit(1);
             }
 
-            snprintf(temp_dir,allocSize+1,"%s/%s",dir,directories[i]);
+            snprintf( temp_dir,allocSize+1,"%s/%s",dir,directories[i] );
 
-            if(i==selection) {
-                wattron(current_win, A_STANDOUT);
+            if( i==selection ) {
+                wattron( current_win, A_STANDOUT );
             } else {
-                wattroff(current_win, A_STANDOUT);
+                wattroff( current_win, A_STANDOUT );
             }
 
             if( isRegularFile(temp_dir) == 0 ) {
-                wattron(current_win, A_BOLD);
+                wattron( current_win, A_BOLD );
             } else {
-                wattroff(current_win, A_BOLD);
+                wattroff( current_win, A_BOLD );
             } 
 
-            wmove(current_win,t+1,2);
+            wmove( current_win,t+1,2 );
 
-            if( checkClipboard(temp_dir) == 0) {
-                wprintw(current_win, "%.*s\n", maxx/2, directories[i]);
+            if( checkClipboard( temp_dir ) == 0 ) {
+                wprintw( current_win, "%.*s\n", maxx/2, directories[i] );
             } else {
-                wprintw(current_win, "* %.*s\n", maxx/2-3, directories[i]);
+                wprintw( current_win, "* %.*s\n", maxx/2-3, directories[i] );
             }
-            t++;
         }
 
-        if(selection == -1) {
+        if( selection == -1 ) {
             selection = 0;
             directories[0] = malloc(6);
-            if(directories[0] == NULL){
+            if( directories[0] == NULL ) {
                 endwin();
                 printf("%s\n", "Couldn't allocate memory!");
                 exit(1);
             }
-            snprintf(directories[0],6,"%s","Empty");
+            snprintf( directories[0],6,"%s","Empty" );
         }
-        snprintf(selected_file,NAME_MAX,"%s",directories[selection]);
+        snprintf( selected_file,NAME_MAX,"%s",directories[selection] );
 
         displayStatus();
 
-        allocSize = snprintf(NULL,0,"%s",dir);
-        prev_dir = malloc(allocSize+1);
-        if(prev_dir == NULL) {
+        allocSize = snprintf( NULL,0,"%s",dir );
+        prev_dir = malloc( allocSize + 1 );
+        if( prev_dir == NULL ) {
             endwin();
             printf("%s\n", "Couldn't allocate memory!");
             exit(1);
         }
-        snprintf(prev_dir,allocSize+1,"%s",dir);
+        snprintf( prev_dir,allocSize+1,"%s",dir );
         getParentPath(prev_dir);
 
-        allocSize = snprintf(NULL,0,"%s/%s", dir, directories[selection]);
-        next_dir = malloc(allocSize+1);
-        if(next_dir == NULL) {
+        allocSize = snprintf( NULL,0,"%s/%s", dir, directories[selection] );
+        next_dir = malloc( allocSize+1 );
+        if( next_dir == NULL ) {
             endwin();
-            printf("%s\n", "Couldn't allocate memory!");
+            printf( "%s\n", "Couldn't allocate memory!" );
             exit(1);
         }
 
@@ -203,26 +204,7 @@ int main(int argc, char* argv[]) {
 
         if(len != 0){
             if(len_preview != -1) {
-                for(i=0; i<len_preview; i++ ) {
-                    if(i == maxy - 1)
-                        break;
-                    wmove(preview_win,i+1,2);
-                    free(temp_dir);
-                    allocSize = snprintf(NULL,0,"%s/%s", next_dir, next_directories[i]);
-                    temp_dir = malloc(allocSize+1);
-                    if(temp_dir == NULL) {
-                        endwin();
-                        printf("%s\n", "Couldn't allocate memory!");
-                        exit(1);
-                    }
-                    snprintf(temp_dir, allocSize+1, "%s/%s", next_dir, next_directories[i]);
-                    if( isRegularFile(temp_dir) == 0 ){
-                        wattron(preview_win, A_BOLD);
-                    } else {
-                        wattroff(preview_win, A_BOLD);
-                    }
-                    wprintw(preview_win, "%.*s\n", maxx/2 - 3, next_directories[i]);
-                }
+                PreviewNextDir(next_dir, next_directories);
             } else {
                 getPreview(next_dir, maxy, maxx/2+2);
             }
@@ -369,63 +351,17 @@ int main(int argc, char* argv[]) {
                 break;
 
             case KEY_RMBOOKMARK:
+                RmBookMark(pid);
                 endwin();
-
-                if( access( bookmarks_path, F_OK ) != -1 ){
-                    sigprocmask(SIG_BLOCK, &x, NULL);
-                    pid = fork();
-                    if( pid == 0 ){
-                        execlp(editor, editor, bookmarks_path, (char *)0);
-                        exit(1);
-                    } else {
-                        int status;
-                        waitpid(pid, &status, 0);
-                        setSelectionCount();
-                    }
-                    refresh();
-                } else {
-                    displayAlert("Bookmark List is Empty!");
-                    sleep(1);
-                }
                 break;
 
             case KEY_VIEWSEL:
                 endwin();
-                if( access( clipboard_path, F_OK ) != -1 ) {
-                    pid = fork();
-                    if( pid == 0 ) {
-                        execlp("less", "less", clipboard_path, (char *)0);
-                        exit(1);
-                    } else {
-                        int status;
-                        waitpid(pid, &status, 0);
-                    }
-                    refresh();
-                } else {
-                    displayAlert("Selection List is Empty!");
-                    sleep(1);
-                }
+                ViewSel(pid);
                 break;
 
             case KEY_EDITSEL:
-                sigprocmask(SIG_BLOCK, &x, NULL);
-                endwin();
-
-                if(access(clipboard_path, F_OK) != -1 ) {
-                    pid = fork();
-                    if(pid == 0 ){
-                        execlp(editor, editor, clipboard_path, (char *)0);
-                        exit(1);
-                    } else {
-                        int status;
-                        waitpid(pid, &status, 0);
-                        setSelectionCount();
-                    }
-                    refresh();
-                } else {
-                    displayAlert("Selection List is Empty!");
-                    sleep(1);
-                }
+                EditSel(pid);
                 break;
 
             case KEY_INFO:
@@ -434,6 +370,7 @@ int main(int argc, char* argv[]) {
                 break;
 
             case KEY_TOGGLEHIDE:
+                // i don't like it, seems a bit spaghetti. 
                 if( hiddenFlag == 1 )
                     hiddenFlag = 0;
                 else
@@ -464,6 +401,6 @@ int main(int argc, char* argv[]) {
         free(next_directories);
     }
 
-    getOut();
+    WrappeUp();
     return EXIT_SUCCESS;
 }

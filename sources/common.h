@@ -16,6 +16,7 @@
 #include <signal.h>
 #include <linux/limits.h>
 #include <sys/ioctl.h>
+#include <magic.h>
 
 #include "config.h"
 
@@ -71,36 +72,57 @@ extern FILE *fp;
 
 // Prototypes
 void init(int argc, char* argv[]);
+
 int getNumberofFiles(char* directory);
+
 int getFiles(char* directory, char* target[]);
+
 int compare(const void* a, const void* b);
+
 void initWindows(void);
+
 void displayStatus(void);
+
 void getParentPath(char* path);
+
 void refreshWindows(void);
+
 void scrollUp(void);
+
 void scrollDown(void);
+
 void goForward(void);
+
 void goBack(void);
+
 void nextPage(void);
+
 void prevPage(void);
+
 int checkClipboard(char* filepath);
+
 char* replace(char* str, char* a, char* b);
+
 void writeClipboard(char* filepath);
+
 void removeClipboard(char* filepath);
+
 void emptyClipboard(void);
+
 void copyFiles(char* present_dir);
+
 void removeFiles(void);
+
 void moveFiles(char* present_dir);
+
 int fileExists(char* file);
+
 WINDOW *createNewWin(int height, int width, int starty, int startx);
+
 void displayAlert(char *message);
-int getNumberOfBookmarks(void);
-void displayBookmarks(void);
-void openBookmarkDir(char secondKey);
-int bookmarkExists(char bookmark);
-//void addBookmark(char bookmark, char *path);
+
 void setSelectionCount(void);
+
 void handleFlags(char** directories);
 
 void openFile(char *filepath);
@@ -117,7 +139,7 @@ void getPreview(char *filepath, int maxy, int maxx);
 
 void viewPreview(void);
 
-void getImgPreview(char *filepath, int maxy, int maxx);
+void GenImgPreview(char *filepath, int maxy, int maxx);
 
 void clearImg(void);
 
@@ -127,7 +149,7 @@ void cursesInit();
 
 void keyboard(void);
 
-void getOut(void);
+void WrappeUp(void);
 
 void keyHandler();
 
@@ -153,5 +175,18 @@ void Deleting(void);
 
 void ShowBookMark(void);
 
-void AddBookMark(void);
+void RmBookMark(pid_t pid);
 
+void ViewSel(pid_t pid);
+
+void EditSel(pid_t pid);
+
+void PreviewNextDir(char *next_dir, char **next_directories);
+
+void AddBookMark();
+
+int getNumberOfBookmarks(void);
+
+void displayBookmarks(void);
+
+int bookmarkExists(char bookmark);

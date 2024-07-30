@@ -351,7 +351,6 @@ void init(int argc, char* argv[]) {
         setSelectionCount();
     }
 }
-
 // Checks if a file exists
 int fileExists(char *file) {
     if( access ( file, F_OK ) != -1 ) {
@@ -361,61 +360,7 @@ int fileExists(char *file) {
     }
 }
 
-int getNumberOfBookmarks(void) {
-    FILE *fp = fopen(bookmarks_path, "r");
-    if( fp == NULL ) {
-        return -1;
-    }
-    char *buf;
-    buf = malloc(PATH_MAX);
-    if(buf == NULL) {
-        endwin();
-        printf("%s\n", "Couldn't allocate memory!");
-        exit(1);
-    }
-    int num = 0;
-    while( fgets ( buf, PATH_MAX, ( FILE* ) fp)) {
-        num++;
-    }
-    free(buf);
-    fclose(fp);
-    return num;
-}
 
-void displayBookmarks(void) {
-    FILE *fp = fopen(bookmarks_path, "r");
-    char *buf;
-    if(fp == NULL) {
-        endwin();
-        printf("Couldn't Open Bookmarks File!\n");
-        exit(1);
-    }
-    buf = malloc(PATH_MAX);
-    if(buf == NULL) {
-        endwin();
-        printf("%s\n", "Couldn't allocate memory!");
-        exit(1);
-    }
-    wprintw(keys_win,"Key\tPath\n");
-    while(fgets(buf, PATH_MAX, (FILE*) fp)) {
-        wprintw(keys_win, "%c", buf[0]);
-
-        free(temp_dir);
-        allocSize = snprintf(NULL,0,"%s",buf);
-        temp_dir = malloc(allocSize+1);
-        if(temp_dir == NULL) {
-            endwin();
-            printf("%s\n", "Couldn't allocate memory!");
-            exit(1);
-        }
-
-        strncpy(temp_dir, buf + 2, strlen(buf)-2);
-        strtok(temp_dir,"\n");
-        wprintw(keys_win, "\t%s\n", temp_dir);
-    }
-    free(buf);
-    fclose(fp);
-}
 
 char* replace(char* str, char* a, char* b) {
     int len  = strlen(str);
@@ -429,104 +374,6 @@ char* replace(char* str, char* a, char* b) {
     }
     return str;
 }
-
-void openBookmarkDir(char secondKey) {
-    FILE *fp = fopen(bookmarks_path, "r");
-    char *buf;
-    if(fp == NULL) {
-        endwin();
-        printf("Couldn't Open Bookmarks File!\n");
-        exit(1);
-    }
-    buf = malloc(PATH_MAX);
-    if(buf == NULL) {
-        endwin();
-        printf("%s\n", "Couldn't allocate memory!");
-        exit(1);
-    }
-    while(fgets(buf, PATH_MAX, (FILE*) fp)) {
-        if(buf[0] == secondKey) {
-            free(temp_dir);
-            allocSize = snprintf(NULL,0,"%s",buf);
-            temp_dir = malloc(allocSize+1);
-            if(temp_dir == NULL) {
-                endwin();
-                printf("%s\n", "Couldn't allocate memory!");
-                exit(1);
-            }
-            strncpy(temp_dir, buf + 2, strlen(buf)-2);
-            strtok(temp_dir,"\n");
-            replace(temp_dir,"//","\n");
-            if( fileExists(temp_dir) == 1 ) {
-                free(dir);
-                allocSize = snprintf(NULL,0,"%s",temp_dir);
-                dir = malloc(allocSize+1);
-                if(dir == NULL) {
-                    endwin();
-                    printf("%s\n", "Couldn't allocate memory!");
-                    exit(1);
-                }
-                snprintf(dir,allocSize+1,"%s",temp_dir);
-            }
-            start = 0;
-            selection = 0;
-            break;
-        }
-    }
-    free(buf);
-    fclose(fp);
-}
-
-int bookmarkExists(char bookmark) {
-    FILE *fp = fopen(bookmarks_path, "r");
-    if( fp == NULL ) {
-        return 0;
-    }
-    char *buf;
-    buf = malloc(PATH_MAX);
-    if(buf == NULL) {
-        endwin();
-        printf("%s\n", "Couldn't allocate memory!");
-        exit(1);
-    }
-    while(fgets(buf, PATH_MAX, (FILE*) fp)) {
-        if(buf[0] == bookmark) {
-            fclose(fp);
-            free(buf);
-            return 1;
-        }
-    }
-    free(buf);
-    fclose(fp);
-    return 0;
-}
-
-void addBookmark(char bookmark, char *path) {
-    FILE *fp = fopen(bookmarks_path, "a+");
-    if(fp == NULL) {
-        endwin();
-        printf("Couldn't Open Bookmarks File!\n");
-        exit(1);
-    }
-    int allocSize = snprintf(NULL, 0, "%s", path);
-    path = realloc(path, allocSize+2);
-    char *temp = strdup(path);
-    if(temp == NULL) {
-        endwin();
-        printf("%s\n", "Couldn't allocate memory!");
-        exit(1);
-    }
-    fprintf(fp,"%c:%s\n", bookmark, replace(temp,"\n","//"));
-    free(temp);
-    fclose(fp);
-}
-
-WINDOW *createNewWin(int height, int width, int starty, int startx) {
-    WINDOW *local_win;
-    local_win = newwin(height, width, starty, startx);
-    return local_win;
-}
-
 
 int checkClipboard(char *filepath) {
     FILE *f = fopen(clipboard_path, "r");
@@ -799,7 +646,7 @@ void moveFiles(char *present_dir) {
     char dest_path[PATH_MAX];
 
     if (f == NULL) {
-    //    perror("Failed to open clipboard file");
+        //    perror("Failed to open clipboard file");
         return;
     }
 
@@ -917,7 +764,7 @@ void goBack(void) {
     getLastToken("/");
 }
 
-void getOut(void) {
+void WrappeUp(void) {
     free(cache_path);
     free(temp_clipboard_path);
     free(clipboard_path);
@@ -1245,27 +1092,41 @@ void Deleting(void) {
     }
 }
 
-void ShowBookMark(void) {
-    len_bookmarks = getNumberOfBookmarks();
-    if( len_bookmarks == -1 ) {
-        displayAlert("No Bookmarks Found!");
-        sleep(1);
+
+void ViewSel(pid_t pid) {
+    if( access( clipboard_path, F_OK ) != -1 ) {
+        pid = fork();
+        if( pid == 0 ) {
+            execlp("less", "less", clipboard_path, (char *)0);
+            exit(1);
+        } else {
+            int status;
+            waitpid(pid, &status, 0);
+        }
+        refresh();
     } else {
-        keys_win = createNewWin(len_bookmarks+1, maxx, maxy-len_bookmarks, 0);
-        displayBookmarks();
-        secondKey = wgetch(keys_win);
-        openBookmarkDir(secondKey);
-        delwin(keys_win);
+        displayAlert("Selection List is Empty!");
+        sleep(1);
     }
 }
 
-void AddBookMark(void) {
-    displayAlert("Enter Bookmark Key");
-    secondKey = wgetch(status_win);
-    if( bookmarkExists(secondKey) == 1 ){
-        displayAlert("Bookmark Key Exists!");
-        sleep(1);
+void EditSel(pid_t pid) {
+    sigprocmask(SIG_BLOCK, &x, NULL);
+    endwin();
+
+    if(access(clipboard_path, F_OK) != -1 ) {
+        pid = fork();
+        if(pid == 0 ){
+            execlp(editor, editor, clipboard_path, (char *)0);
+            exit(1);
+        } else {
+            int status;
+            waitpid(pid, &status, 0);
+            setSelectionCount();
+        }
+        refresh();
     } else {
-        addBookmark(secondKey, dir);
+        displayAlert("Selection List is Empty!");
+        sleep(1);
     }
 }

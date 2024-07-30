@@ -4,15 +4,16 @@
 #define MAIN "main.c"
 #define FUNCTIONS "functions.c"
 #define PREVIEW "preview.c"
-#define KEYBOARD "keyboard.c"
+#define BOOK "bookmark.c"
 
 #define MAINOBJ "obj/main.o"
 #define FUNCOBJ "obj/functions.o"
 #define PREVOBJ "obj/preview.o"
+#define BOOKOBJ    "obj/bookmark.o"
 
 #define BIN "../cfl"
 #define MAN "../cfl.1"
-#define SCRIPTS "../scripts/"
+#define SCRIPTS "scripts/"
 
 #define PREFIX "/usr/local/bin/"
 
@@ -42,10 +43,11 @@ void Compile(void) {
     CMD("doas", "mkdir", "-p", "/usr/share/cfl");
     CMD(cc(), "-c", MAIN, CFLAGS, "-o", MAINOBJ);
     CMD(cc(), "-c", FUNCTIONS, CFLAGS, "-o", FUNCOBJ);
+    CMD(cc(), "-c", BOOK, CFLAGS, "-o", BOOKOBJ);
 }
 
 void Link(void) {
-    CMD(cc(), "-o", BIN, MAINOBJ, FUNCOBJ, PREVIEW, LIBS);
+    CMD(cc(), "-o", BIN, MAINOBJ, FUNCOBJ, PREVIEW, BOOK, LIBS);
     return;
 }
 
