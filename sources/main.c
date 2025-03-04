@@ -323,7 +323,6 @@ int main(int argc, char* argv[]) {
                 break;
 
             case KEY_EMPTYSEL:
-                emptyClipboard();
                 selectedFiles = 0;
                 break;
 
@@ -385,6 +384,9 @@ int main(int argc, char* argv[]) {
 
             case KEY_SCRIPT:
                 getScripts(*directories);
+                break;
+            case KEY_DIR:
+                CreateDir();
                 break;
         }
 

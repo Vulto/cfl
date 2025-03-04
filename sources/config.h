@@ -12,10 +12,10 @@
 #define SHOW_PDF_PREVIEWS false
 
 // Display Image Script
-#define DISPLAYIMG "/home/vulto/.config/cfl/scripts/"
+#define DISPLAYIMG "/usr/share/cfiles/scripts/displayimg_uberzug"
 
 // Clear Image Preview Script
-#define CLEARIMG "/home/vulto/.config/cfl/scripts/"
+#define CLEARIMG "/usr/share/cfiles/scripts/clearimg_uberzug"
 
 // Program used to open non-text file (Eg: `xdg-open` or `thunar`)
 #define FILE_OPENER "nopen"
@@ -111,3 +111,5 @@
 
 // Quit
 #define KEY_ESCAPE 'q'
+
+#define KEY_DIR 'n'

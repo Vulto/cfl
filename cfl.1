@@ -1,143 +1,229 @@
-.\" Manpage for filemanager
-.\" Contact: Jefferson <jss.ssa@proton.me>
-.\" Date: July 28, 2024
-.\" 
-.TH FILEMANAGER 1 "July 28, 2024" "Version 1.0" 
+.\" Man page for cfl
+.TH CFL 1 "August 2024" "Version 1.0" "User Commands"
+
 .SH NAME
-C FIle Manager \- A terminal-based file manager written in C
+cfl \- A terminal-based file manager using ncurses.
+
 .SH SYNOPSIS
-.B filemanager
-[\fIOPTIONS\fR]
+.B cfl
+.RI [ options ]
+.RI [ directory ]
+
 .SH DESCRIPTION
-.B CFL
-is a terminal-based application for navigating and managing files in a UNIX-like file system environment. It provides functionality to browse directories, select files, execute operations on them, and manage bookmarks.
+.B cfl
+is a simple, terminal-based file manager written in C, utilizing the ncurses library to provide a user-friendly interface for browsing and managing files from the command line. It supports navigation, file operations, bookmarking, and previews.
 
 .SH OPTIONS
-The following options are available when running
-.B cfl:
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Display help and exit.
 
 .TP
-.B \-h, \-\-help
-Display this help message and exit.
+\fB\-v\fR, \fB\-\-version\fR
+Output version information and exit.
 
 .TP
-.B \-v, \-\-version
-Display version information and exit.
+\fB<directory>\fR
+Specify the directory to open on startup. If no directory is specified, the current working directory is used.
 
-.SH USAGE
-Run the application from the command line without any arguments to start in the current directory. Use the following keybindings to navigate and manage files:
-
-.TP
-.B k
-Scroll up through the directory listing.
+.SH KEY BINDINGS
+The following key bindings are used for navigation and operations within the file manager:
 
 .TP
-.B j
-Scroll down through the directory listing.
+\fBh\fR
+Navigate to the parent directory.
 
 .TP
-.B KEY_NAVNEXT, \fBEnter\fR
-Enter the selected directory or open the selected file.
+\fBj\fR
+Move the selection down.
 
 .TP
-.B h
-Go back to the previous directory.
+\fBk\fR
+Move the selection up.
 
 .TP
-.B Shift + V
-Select or deselect a file to copy/move.
+\fBl\fR
+Navigate to the selected directory or open the selected file.
 
 .TP
-.B p
-Paste the previously selected files into the current directory.
+\fBg\fR
+Go to the beginning of the directory.
 
 .TP
-.B !
-Open a shell in the current directory.
+\fBG\fR
+Go to the end of the directory.
 
 .TP
-.B Shift + R
-Rename the selected file.
+\fBT\fR
+Go to the top of the current view.
 
 .TP
-.B c
-Empty the selection clipboard.
+\fBM\fR
+Go to the middle of the current view.
 
 .TP
-.B x
-Open the removal menu for selected files.
+\fBB\fR
+Go to the bottom of the current view.
 
 .TP
-.B =
-Open the bookmarks menu.
+\fB/\fR
+Search all files with the current directory as base.
 
 .TP
-.B +
-Add a bookmark for the current directory.
+\fBs\fR
+Search all files in the current directory.
 
 .TP
-.B -
-Remove a bookmark.
+\fBV\fR
+Add files to the selection list.
 
 .TP
-.B KEY_VIEWSEL
-View the list of selected files.
+\fB\t\fR (TAB)
+View all the selected files.
 
 .TP
-.B KEY_EDITSEL
-Edit the list of selected files.
+\fBe\fR
+Edit the clipboard file.
 
 .TP
-.B i
-Show file information or preview.
+\fBc\fR
+Empty the selection.
 
 .TP
-.B .
+\fBp\fR
+Copy files from the selection list to the current directory.
+
+.TP
+\fBm\fR
+Move files from the selection list to the current directory.
+
+.TP
+\fBR\fR
+Rename files in the selection list.
+
+.TP
+\fBd\fR
+Open the remove menu for file deletion or moving to trash.
+
+.TP
+\fBg\fR
+Move the file to the trash.
+
+.TP
+\fBd\fR
+Delete the file permanently.
+
+.TP
+\fBi\fR
+View file information.
+
+.TP
+\fB.\fR
 Toggle the visibility of hidden files.
 
 .TP
-.B [
-View a preview of the selected file.
+\fB=\fR
+Open the bookmark list.
 
 .TP
-.B #
-Execute scripts on the selected files.
-
-.SH ENVIRONMENT
-.B filemanager
-relies on the following environment variables:
+\fB+\fR
+Add a bookmark for the current directory.
 
 .TP
-.B EDITOR
-Defines the text editor used for editing bookmarks and the selection list.
+\fB-\fR
+Remove a bookmark.
+
+.TP
+\fB#\fR
+Open external scripts.
+
+.TP
+\fB!\fR
+Open a shell in the current directory.
+
+.TP
+\fB[\fR
+View the preview of the selected file.
+
+.TP
+\fBu\fR
+Reload the current directory.
+
+.TP
+\fBq\fR
+Quit the file manager.
+
+.SH ENVIRONMENT VARIABLES
+The following environment variables are used by
+.B cfl:
 
 .TP
 .B SHELL
-Defines the shell to be used when opening a shell session.
+Specifies the shell to be used for executing commands. Default is \fB/bin/bash\fR if not set.
+
+.TP
+.B EDITOR
+Specifies the editor to be used for editing files. Default is \fBnvim\fR if not set.
+
+.TP
+.B XDG_CONFIG_HOME
+Specifies the base directory for user-specific configuration files. If not set, defaults to \fB$HOME/.config\fR.
 
 .SH FILES
-The following files are used by
-.B filemanager:
+.B cfl
+uses the following files for its operations:
 
 .TP
-.I ~/.config/cfl/bookmarks
-The bookmark list file.
+\fB$XDG_CONFIG_HOME/cfl/bookmarks\fR
+File containing user-defined bookmarks.
 
 .TP
-.I ~/.config/cfl/clipboard
-The clipboard file for selected files.
+\fB$XDG_CONFIG_HOME/cfl/clipboard\fR
+Temporary file used to store the clipboard content for file operations.
 
 .TP
-.I Edit config.h
-The configuration file for the file manager.
+\fB$XDG_CONFIG_HOME/cfl/scripts\fR
+Directory containing user-defined scripts.
 
-.SH BUGS
-Please report issues to
-.B <jeff.ssa@proton.me>.
+.TP
+\fB$HOME/.local/share/trash\fR
+Directory used as a trash bin for files deleted from the file manager.
+
+.SH EXAMPLES
+Here are some examples of how to use
+.B cfl:
+
+.TP
+.B cfl
+Launch the file manager in the current directory.
+
+.TP
+.B cfl /path/to/directory
+Open the specified directory on startup.
+
+.TP
+.B cfl \-h
+Display help and usage information.
+
+.TP
+.B cfl \-v
+Display the version information.
 
 .SH AUTHOR
-Written by Jefferson Sa.
+Written by Jeffeson Sá.
+.br
+Contact: \fBjeff.ssa@proton.me\fR
+.br
+Project repository: \fBhttp://github.com/vulto/cfl\fR
+
+.SH BUGS
+If you encounter any bugs or issues, please report them at the project repository:
+.B http://github.com/vulto/cfl/issues
 
 .SH COPYRIGHT
-This is free software; see the source for copying conditions. There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 3 of the License, or (at your option) any later version.
 
+.SH SEE ALSO
+.B bash(1),
+.B nvim(1),
+.B ncurses(3)
