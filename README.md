@@ -29,7 +29,7 @@ Note that this also means the selection list will persist even if all instances 
 For storing bookmarks, `cfl` uses `$XDG_CONFIG_HOME/cfl/bookmarks` file. Bookmarks are stored in the form `<key>:<path>`. You can either edit this file directly
 or press `m` in `cfl` to add new bookmarks.
 
-`cfl` looks for external scripts in the `$XDG_CONFIG_HOME/cfiles/scripts` directory. Make sure the scripts are executable before moving them to the scripts directory.
+`cfl` looks for external scripts in the `$XDG_CONFIG_HOME/cfl/scripts` directory. Make sure the scripts are executable before moving them to the scripts directory.
 
 If `$XDG_CONFIG_HOME` is not set, then `$HOME/.config` is used.
 
