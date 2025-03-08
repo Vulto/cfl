@@ -189,4 +189,4 @@ int getNumberOfBookmarks(void);
 
 void displayBookmarks(void);
 
-int bookmarkExists(char bookmark);
+void CreateDir();

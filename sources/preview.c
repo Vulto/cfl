@@ -38,23 +38,6 @@ void getMIME(const char *filepath, char mime[50]) {
 }
 
 
-
-
-/* Gets the last token from temp_dir by using `tokenizer` as a delimeter */
-void getLastToken(char *tokenizer) {
-    pch = strtok(temp_dir, tokenizer);
-    while (pch != NULL) {
-        free(last);
-        last = strdup(pch);
-        if(last == NULL) {
-            endwin();
-            printf("%s\n", "Couldn't allocate memory!");
-            exit(1);
-        }
-        pch = strtok(NULL,tokenizer);
-    }
-}
-
 void getFileType(char *filepath) {
     allocSize = snprintf(NULL,0,"%s",filepath);
     temp_dir = malloc(allocSize+1);

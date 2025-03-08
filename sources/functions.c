@@ -56,7 +56,7 @@ int getFiles(char* directory, char* target[]) {
     }
 
     closedir (pDir);
-    return 1;
+    return EXIT_FAILURE;
 }
 
 int compare (const void * a, const void * b ) {
@@ -80,19 +80,9 @@ int compare (const void * a, const void * b ) {
     }
     snprintf(temp_filepath2,PATH_MAX,"%s/%s", sort_dir, *(char **)b);
 
-    if(isRegularFile(temp_filepath1) == 0 && isRegularFile(temp_filepath2) == 1) {
-        free(temp_filepath1);
-        free(temp_filepath2);
-        return -1;
-    }else if(isRegularFile(temp_filepath1) == 1 && isRegularFile(temp_filepath2) == 0) {
-        free(temp_filepath1);
-        free(temp_filepath2);
-        return 1;
-    } else {
         free(temp_filepath1);
         free(temp_filepath2);
         return strcasecmp(*(char **)a, *(char **)b);
-    }
 }
 
 void handleFlags(char** directories) {
@@ -168,11 +158,29 @@ void displayStatus(void) {
 }
 
 void displayAlert(char *message) {
-    wclear(status_win);
-    wattron(status_win, A_BOLD);
-    wprintw(status_win, "\n%s", message);
-    wattroff(status_win, A_BOLD);
-    wrefresh(status_win);
+    int msgLen = strlen(message) + 1;
+    int rows, cols;
+    
+    getmaxyx(stdscr, rows, cols);
+    
+    int winHeight = 3;
+    int winWidth = msgLen + 2;
+    int startY = (rows - winHeight) / 2;
+    int startX = (cols - winWidth) / 2;
+    
+    WINDOW *statusWin = newwin(winHeight, winWidth, startY, startX);
+    
+    box(statusWin, 0, 0);
+    
+    wattron(statusWin, A_BOLD);
+    mvwprintw(statusWin, 1, 1, "%s", message);
+    wattroff(statusWin, A_BOLD);
+    
+    wrefresh(statusWin);
+    
+    getch();
+    
+    delwin(statusWin);
 }
 
 void setSelectionCount(void) {
@@ -453,12 +461,6 @@ void removeClipboard(char *filepath) {
     }
 }
 
-void emptyClipboard(void) {
-    if( remove(clipboard_path) == -1) {
-        return;
-    }
-}
-
 void getParentPath(char *path) {
     char *p;
     p = strrchr(path,'/');
@@ -736,6 +738,21 @@ void goForward(void) {
     }
 }
 
+/* Gets the last token from temp_dir by using `tokenizer` as a delimeter */
+void getLastToken(char *tokenizer) {
+    pch = strtok(temp_dir, tokenizer);
+    while (pch != NULL) {
+        free(last);
+        last = strdup(pch);
+        if(last == NULL) {
+            endwin();
+            printf("%s\n", "Couldn't allocate memory!");
+            exit(1);
+        }
+        pch = strtok(NULL,tokenizer);
+    }
+}
+
 void goBack(void) {
     free(temp_dir);
     allocSize = snprintf(NULL,0,"%s",dir);
@@ -764,23 +781,6 @@ void goBack(void) {
     getLastToken("/");
 }
 
-void WrappeUp(void) {
-    free(cache_path);
-    free(temp_clipboard_path);
-    free(clipboard_path);
-    free(bookmarks_path);
-    free(scripts_path);
-    free(trash_path);
-    free(editor);
-    free(shell);
-    free(dir);
-    free(temp_dir);
-    if(last != NULL) {
-        free(last);
-    }
-    clearImg();
-    endwin();
-}
 
 void goEnd(void) {
     selection = len - 1;
@@ -804,7 +804,6 @@ void getScripts(char* directories) {
     len_scripts = getNumberofFiles(scripts_path);
     if(len_scripts <= 0) {
         displayAlert("No scripts found!");
-        sleep(1);
     } else {
         clearImg();
         int status;
@@ -1084,11 +1083,11 @@ void Deleting(void) {
 #else
             removeFiles();
             selectedFiles = 0;
+            displayAlert("File deletion success!");
 #endif
         }
     } else {
         displayAlert("Select some files first!");
-        sleep(1);
     }
 }
 
@@ -1127,6 +1126,53 @@ void EditSel(pid_t pid) {
         refresh();
     } else {
         displayAlert("Selection List is Empty!");
-        sleep(1);
     }
+}
+
+void WrappeUp(void) {
+    free(cache_path);
+    free(temp_clipboard_path);
+    free(clipboard_path);
+    free(bookmarks_path);
+    free(scripts_path);
+    free(trash_path);
+    free(editor);
+    free(shell);
+    free(dir);
+    free(temp_dir);
+
+    if(last != NULL) {
+        free(last);
+    }
+    clearImg();
+    endwin();
+}
+
+void CreateDir() {
+
+    int height = 3, width = 50;
+    int startY = (LINES - height) / 2;
+    int startX = (COLS - width) / 2;
+    WINDOW *subWin = newwin(height, width, startY, startX);
+
+    box(subWin, 0, 0);
+    mvwprintw(subWin, 1, 1, "Enter directory name: ");
+    wrefresh(subWin);
+
+    char dirName[256];
+    echo();
+    mvwgetnstr(subWin, 1, 22, dirName, 255);
+    noecho();
+
+    werase(subWin);
+    box(subWin, 0, 0);
+    if (mkdir(dirName, 0755) == 0) {
+        mvwprintw(subWin, 1, 1, "Directory '%s' created", dirName);
+    } else {
+        mvwprintw(subWin, 1, 1, "Error creating directory '%s'", dirName);
+    }
+
+    wrefresh(subWin);
+    getch();
+    endwin();
 }

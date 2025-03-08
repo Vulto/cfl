@@ -125,7 +125,6 @@ void ShowBookMark(void) {
     len_bookmarks = GetNumberOfBookmarks();
     if (len_bookmarks == -1) {
         displayAlert("No Bookmarks Found!");
-        sleep(1);
     } else {
         keys_win = createNewWin(len_bookmarks + 1, maxx, maxy - len_bookmarks, 0);
         DisplayBookmarks();
@@ -140,7 +139,6 @@ void AddBookMark(void) {
     secondKey = wgetch(status_win);
     if (BookmarkExists(secondKey) == 1) {
         displayAlert("Bookmark Key Exists!");
-        sleep(1);
     } else {
         AddBookmark(secondKey, dir);
     }
@@ -161,6 +159,5 @@ void RmBookMark(pid_t pid) {
         refresh();
     } else {
         displayAlert("Bookmark List is Empty!");
-        sleep(1);
     }
 }
