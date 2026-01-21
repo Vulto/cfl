@@ -1,49 +1,4 @@
-#include "common.h"
-
-sigset_t x;
-int raised_signal = -1;
-int len = 0;
-int len_preview = 0;
-int len_bookmarks = 0;
-int len_scripts = 0;
-int selectedFiles = 0;
-int i = 0;
-int allocSize;
-char selected_file[NAME_MAX];
-char* dir = NULL;
-char* next_dir = NULL;
-char* prev_dir = NULL;
-char* editor = NULL;
-char* shell = NULL;
-char* temp_dir = NULL;
-char* pch = NULL;
-struct passwd *info;
-char* sort_dir = NULL;
-char* cache_path = NULL;
-char* clipboard_path = NULL;
-char* bookmarks_path = NULL;
-char* scripts_path = NULL;
-char* temp_clipboard_path = NULL;
-char* trash_path = NULL;
-int selection = 0;
-int start = 0;
-int clearFlag = 0;
-int clearFlagImg = 0;
-int searchFlag = 0;
-int backFlag = 0;
-int hiddenFlag = SHOW_HIDDEN;
-int pdfflag = SHOW_PDF_PREVIEWS;
-char* last = NULL;
-WINDOW* current_win;
-WINDOW* preview_win;
-WINDOW* status_win;
-WINDOW* keys_win;
-int startx, starty, maxx, maxy;
-bool Running = true;
-char secondKey;
-char *buf;
-char *path;
-FILE *fp;
+#include "functions.h"
 
 int main(int argc, char* argv[]) {
     init(argc, argv);
@@ -253,12 +208,11 @@ int main(int argc, char* argv[]) {
                 break;
 
             case KEY_START:
-                selection = 0;
-                start = 0;
+				goSTART();
                 break;
 
             case KEY_GOEND:
-                goEnd();
+                goEND();
                 break;
 
             case KEY_TOP:
@@ -266,10 +220,11 @@ int main(int argc, char* argv[]) {
                 break;
 
             case KEY_BOTTOM:
-                goBottom();
+                goBOTTOM();
                 break;
 
             case KEY_MID:
+				goMID();
                 break;
 
             case KEY_SEARCHALL:
@@ -338,20 +293,6 @@ int main(int argc, char* argv[]) {
             case KEY_REMOVEMENU:
                 clearImg();
                 Deleting(); 
-                break;
-            case KEY_BOOKMARK:
-                clearImg();
-                ShowBookMark();
-                break;
-
-            case KEY_ADDBOOKMARK:
-                clearImg();
-                AddBookMark();
-                break;
-
-            case KEY_RMBOOKMARK:
-                RmBookMark(pid);
-                endwin();
                 break;
 
             case KEY_VIEWSEL:

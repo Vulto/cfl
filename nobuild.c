@@ -6,13 +6,10 @@
 #define PREVIEW "preview.c"
 #define BOOK "bookmark.c"
 
-#define MAINOBJ "obj/main.o"
-#define FUNCOBJ "obj/functions.o"
-#define PREVOBJ "obj/preview.o"
-#define BOOKOBJ    "obj/bookmark.o"
+#define MAINOBJ "main.o"
 
-#define BIN "../cfl"
-#define MAN "../cfl.1"
+#define BIN "cfl"
+#define MAN "cfl.1"
 #define SCRIPTS "scripts/"
 #define PRIV_ESC "sudo"
 
@@ -39,16 +36,13 @@ char *cc(void) {
 }
 
 void Compile(void) {
-    CMD("mkdir", "-p", "obj");
     CMD(PRIV_ESC, "mkdir", "-p", "/usr/share/man/man1/cfl");
     CMD(PRIV_ESC, "mkdir", "-p", "/usr/share/cfl");
     CMD(cc(), "-c", MAIN, CFLAGS, "-o", MAINOBJ);
-    CMD(cc(), "-c", FUNCTIONS, CFLAGS, "-o", FUNCOBJ);
-    CMD(cc(), "-c", BOOK, CFLAGS, "-o", BOOKOBJ);
 }
 
 void Link(void) {
-    CMD(cc(), "-o", BIN, MAINOBJ, FUNCOBJ, PREVIEW, BOOK, LIBS);
+    CMD(cc(), "-o", BIN, MAINOBJ, LIBS);
     return;
 }
 
