@@ -1303,7 +1303,7 @@ void getMIME(const char *filepath, char mime[50]) {
     if (strncmp(mime_type, "app", 3) == 0) {
         snprintf(mime, 50, "%s", mime_type);
     } else {
-        const const char *slash_pos = strchr(mime_type, '/');
+        const char *slash_pos = strchr(mime_type, '/');
         if (slash_pos != NULL) {
             snprintf(mime, slash_pos - mime_type + 1, "%s", mime_type);
         } else {

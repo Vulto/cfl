@@ -2,7 +2,6 @@
 #include "./nobuild.h"
 
 #define MAIN "main.c"
-#define FUNCTIONS "functions.c"
 #define PREVIEW "preview.c"
 #define BOOK "bookmark.c"
 
