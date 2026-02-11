@@ -1,5 +1,15 @@
 //config.h
 
+// Preview limits (self-contained; no external tools)
+#ifndef MAX_PREVIEW_BYTES
+#define MAX_PREVIEW_BYTES (50 * 1024 * 1024) // 50 MB
+#endif
+
+#ifndef TEXT_PREVIEW_LINES
+#define TEXT_PREVIEW_LINES 20
+#endif
+
+
 #define CONFIRM_ON_DEL false 
 
 // Set to 1 if you want to see hidden files on startup
@@ -12,12 +22,12 @@
 #define SHOW_PDF_PREVIEWS false
 
 // Display Image Script
-#define DISPLAYIMG "/home/vulto/.config/cfl/scripts/displayimg_uberzug"
+#define DISPLAYIMG "~/.config/cfl/scripts/displayimg_uberzug"
 
 // Clear Image Preview Script
-#define CLEARIMG "/home/vulto/.config/cfl/scripts/clearimg_uberzug"
+#define CLEARIMG "~/.config/cfl/scripts/clearimg_uberzug"
 
-// Program used to open non-text file (Eg: `xdg-open` or `thunar`)
+// Program used to open files
 #define FILE_OPENER "nopen"
 
 // Go to parent directory
@@ -57,7 +67,7 @@
 #define KEY_SEL 'V'
 
 // View all the selected files
-#define KEY_VIEWSEL '\t' //TAB
+#define KEY_VIEWSEL '\t' // TAB
 
 // Edit the clippboard file
 #define KEY_EDITSEL 'e'
