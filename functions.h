@@ -65,11 +65,14 @@ FILE *fp;
 
 
 void clearImg(void);
+// Ueberzug++ helpers (declared here because functions.h is included before their definitions)
+static void ueberzugpp_start_once(void);
+static void ueberzugpp_add(const char *img_path);
+static void ueberzugpp_remove(void);
+static void ueberzugpp_stop(void);
 void initWindows(void);
 void openFile(char *filepath);
 void getLastToken(char *tokenizer);
-void GenImgPreview(char *filepath,  int maxy, int maxx);
-
 void cursesInit(void) {
 	initscr();
 	noecho();
@@ -1236,6 +1239,7 @@ void WrappeUp(void) {
 		free(last);
 	}
 	clearImg();
+	ueberzugpp_stop();
 	endwin();
 }
 
@@ -1299,7 +1303,7 @@ void getMIME(const char *filepath, char mime[50]) {
     if (strncmp(mime_type, "app", 3) == 0) {
         snprintf(mime, 50, "%s", mime_type);
     } else {
-        char *slash_pos = strchr(mime_type, '/');
+        const char *slash_pos = strchr(mime_type, '/');
         if (slash_pos != NULL) {
             snprintf(mime, slash_pos - mime_type + 1, "%s", mime_type);
         } else {
@@ -1398,7 +1402,7 @@ static void render_hex_preview(const char *path, int maxx) {
             }
             if (i == 7) wprintw(preview_win, " ");
         }
-        wprintw(preview_win, " |%s|", ascii);
+        wprintw(preview_win, " %s", ascii);
         y++;
         offset += bytes_per_line;
     }
@@ -1412,10 +1416,6 @@ void getTextPreview(char *filepath, int maxx) {
     if (stat(filepath, &st) != 0) return;
     if ((size_t)st.st_size > MAX_PREVIEW_BYTES) return;
 
-    // Clear preview area
-    werase(preview_win);
-    box(preview_win, 0, 0);
-
     if (is_probably_text_file(filepath)) {
         render_text_preview(filepath, maxx);
     } else {
@@ -1425,35 +1425,127 @@ void getTextPreview(char *filepath, int maxx) {
 
 
 void getPreview(char *filepath, int maxy, int maxx) {
+    (void)maxy;
+    (void)maxx;
     getFileType(filepath);
-    if (strcasecmp("jpg",last) == 0 ||
-        strcasecmp("png",last) == 0 ||
-        strcasecmp("gif",last) == 0 ||
-        strcasecmp("jpeg",last) == 0) {
-        GenImgPreview(filepath, maxy, maxx);
+    if (strcasecmp("jpg", last) == 0 ||
+        strcasecmp("png", last) == 0 ||
+        strcasecmp("gif", last) == 0 ||
+        strcasecmp("jpeg", last) == 0) {
+        ueberzugpp_add(filepath);
         clearFlagImg = 1;
     } else {
+        ueberzugpp_remove();
         getTextPreview(filepath, maxx);
     }
 }
 
-void GenImgPreview(char *filepath,  int maxy, int maxx) {
-    pid_t pid;
-    pid = fork();
+
+/* GenImgPreview removed: using ueberzugpp IPC */
+
+// ---- Ueberzug++ integration (image previews) ----
+static pid_t ueberzug_pid = -1;
+static FILE *ueberzug_in = NULL;
+static int ueberzug_failed = 0;
+
+static void ueberzugpp_start_once(void) {
+    if (ueberzug_in != NULL || ueberzug_failed) return;
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        ueberzug_failed = 1;
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        ueberzug_failed = 1;
+        return;
+    }
 
     if (pid == 0) {
-        char arg1[5];
-        char arg2[5];
-        char arg3[5];
-        char arg4[5];
-        snprintf(arg1,5,"%d",maxx);
-        snprintf(arg2,5,"%d",2);
-        snprintf(arg3,5,"%d",maxx-6);
-        snprintf(arg4,5,"%d",maxy);
-        execl(DISPLAYIMG,DISPLAYIMG,arg1,arg2,arg3,arg4,filepath,(char *)NULL);
-        exit(1);
+        // child: stdin <- pipe read end
+        dup2(pipefd[0], STDIN_FILENO);
+        close(pipefd[0]);
+        close(pipefd[1]);
+
+        // Detach from ncurses output (ueberzugpp renders independently)
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+
+        execlp(UEBERZUGPP_BIN, UEBERZUGPP_BIN, "layer", "-o", UEBERZUGPP_OUTPUT, (char *)NULL);
+        _exit(127);
+    }
+
+    // parent
+    close(pipefd[0]);
+    ueberzug_pid = pid;
+    ueberzug_in = fdopen(pipefd[1], "w");
+    if (!ueberzug_in) {
+        close(pipefd[1]);
+        ueberzug_failed = 1;
+        ueberzug_pid = -1;
+        return;
+    }
+    setvbuf(ueberzug_in, NULL, _IOLBF, 0); // line buffered
+}
+
+static void ueberzugpp_remove(void) {
+    if (!ueberzug_in) return;
+    fprintf(ueberzug_in, "{\"action\":\"remove\",\"identifier\":\"%s\"}\n", UEBERZUGPP_IDENTIFIER);
+    fflush(ueberzug_in);
+}
+
+static void ueberzugpp_add(const char *img_path) {
+    if (!img_path) return;
+
+    ueberzugpp_start_once();
+    if (!ueberzug_in) return;
+
+    int win_y, win_x, win_h, win_w;
+    getbegyx(preview_win, win_y, win_x);
+    getmaxyx(preview_win, win_h, win_w);
+
+    // Small padding to avoid clobbering UI boundaries
+    int x = win_x + 1;
+    int y = win_y + 1;
+    int w = win_w - 2;
+    int h = win_h - 2;
+
+    if (w <= 0 || h <= 0) return;
+
+    // Replace previous image in-place
+    ueberzugpp_remove();
+
+    // JSON IPC expects cell coordinates and size in cells
+    fprintf(ueberzug_in,
+            "{\"action\":\"add\",\"identifier\":\"%s\",\"path\":\"%s\",\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d}\n",
+            UEBERZUGPP_IDENTIFIER, img_path, x, y, w, h);
+    fflush(ueberzug_in);
+}
+
+static void ueberzugpp_stop(void) {
+    if (ueberzug_in) {
+        ueberzugpp_remove();
+        fclose(ueberzug_in);
+        ueberzug_in = NULL;
+    }
+    if (ueberzug_pid > 0) {
+        kill(ueberzug_pid, SIGTERM);
+        // Best effort wait; don't hang if already reaped
+        waitpid(ueberzug_pid, NULL, WNOHANG);
+        ueberzug_pid = -1;
     }
 }
+// ---- end Ueberzug++ integration ----
+
+
 
 void viewPreview(void) {
     FILE *file;
@@ -1523,14 +1615,10 @@ void viewPreview(void) {
 }
 
 void clearImg() {
-    pid_t pid;
-    pid = fork();
-
-    if(pid == 0) {
-        execl(CLEARIMG,CLEARIMG, (char *)NULL);
-        exit(1);
-    }
+    // Remove current image preview (if any)
+    ueberzugpp_remove();
 }
+
 
 void openFile(char *filepath) {
     sigprocmask(SIG_BLOCK, &x, NULL);
