@@ -1,12 +1,27 @@
 //config.h
 
+// Ueberzug++ image preview (optional; if missing, images just won't render)
+#ifndef UEBERZUGPP_BIN
+#define UEBERZUGPP_BIN "ueberzugpp"
+#endif
+
+// Output backend. For st on X11, "x11" is typical. Other values: wayland, sixel, kitty, iterm2, chafa.
+#ifndef UEBERZUGPP_OUTPUT
+#define UEBERZUGPP_OUTPUT "x11"
+#endif
+
+#ifndef UEBERZUGPP_IDENTIFIER
+#define UEBERZUGPP_IDENTIFIER "cfl_preview"
+#endif
+
+
 // Preview limits (self-contained; no external tools)
 #ifndef MAX_PREVIEW_BYTES
 #define MAX_PREVIEW_BYTES (50 * 1024 * 1024) // 50 MB
 #endif
 
 #ifndef TEXT_PREVIEW_LINES
-#define TEXT_PREVIEW_LINES 20
+#define TEXT_PREVIEW_LINES 60
 #endif
 
 
@@ -20,12 +35,6 @@
 
 // Set to 0 if you don't want to see PDF Previews (previews are broken)
 #define SHOW_PDF_PREVIEWS false
-
-// Display Image Script
-#define DISPLAYIMG "~/.config/cfl/scripts/displayimg_uberzug"
-
-// Clear Image Preview Script
-#define CLEARIMG "~/.config/cfl/scripts/clearimg_uberzug"
 
 // Program used to open files
 #define FILE_OPENER "nopen"

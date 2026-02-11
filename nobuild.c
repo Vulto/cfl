@@ -10,7 +10,6 @@
 
 #define BIN "cfl"
 #define MAN "cfl.1"
-#define SCRIPTS "scripts/"
 #define PRIV_ESC "sudo"
 
 #define PREFIX "/usr/local/bin/"
@@ -48,7 +47,6 @@ void Link(void) {
 
 void Install(void) {
     CMD(PRIV_ESC, "cp", "-f", MAN, "/usr/share/man/man1");
-    CMD(PRIV_ESC, "cp", "-rf", SCRIPTS, "/usr/share/cfl/");
     CMD(PRIV_ESC, "cp", "-f", BIN, PREFIX);
 }
 
