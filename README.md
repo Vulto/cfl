@@ -1,15 +1,14 @@
 
 ## Dependencies
-- `ncursesw`
+- `ncurses`
 - `mediainfo` for viewing media info and file sizes
-- `poppler`(specifically `pdftoppm`) for pdf previews
 
 ## Compiling and Installation
 
     
     ./c -cli  
     Explained command: ./c runs the build system
-                        -c Creates objects
+                        -c Compile
                         -l Link 
                         -i Install
 
@@ -36,14 +35,6 @@ If `$XDG_CONFIG_HOME` is not set, then `$HOME/.config` is used.
 ## Opening Files
 You can set `FILE_OPENER` in `config.h` to specify your file opening program. It is set to use `xdg-open` by default but you can change it to anything.
 
-## Image Previews
-`cfl` uses `Überzug` ([link](https://github.com/seebye/ueberzug)) for image previews.
-
-1. **Überzug**
-
-To use `Überzug` for image previews, set `DISPLAYIMG` and `CLEARIMG` in `config.h` to the paths of `displayimg_uberzug` and `clearimg_uberzug` scripts respectively.
-  * Pros
-    1. Better previews when compared to `w3mimgdisplay`
-  * Cons
-    1. Can't generate previews for mp3 album arts
-    2. Non functional scrolling with arrow keys
+## Image Previews (experimental)
+(NOTE: For image preview, download the image_preview branch.)
+`cfl` uses `Überzugpp` ([link](https://github.com/jstkdng/ueberzugpp)) for image previews.
