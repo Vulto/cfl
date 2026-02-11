@@ -126,7 +126,7 @@ int getFiles(char* directory, char* target[]) {
 	}
 
 	closedir (pDir);
-	return EXIT_FAILURE;
+	return i;
 }
 
 int compare (const void * a, const void * b ) {
@@ -140,7 +140,7 @@ int compare (const void * a, const void * b ) {
 		printf("%s\n", "Couldn't allocate memory!");
 		exit(1);
 	}
-	snprintf(temp_filepath1,PATH_MAX,"%s/%s", sort_dir, *(char **)a);
+	snprintf(temp_filepath1,allocSize+1,"%s/%s", sort_dir, *(char **)a);
 	allocSize = snprintf(NULL,0,"%s/%s", sort_dir, *(char **)b);
 	temp_filepath2 = malloc(allocSize+1);
 	if(temp_filepath2 == NULL) {
@@ -148,7 +148,7 @@ int compare (const void * a, const void * b ) {
 		printf("%s\n", "Couldn't allocate memory!");
 		exit(1);
 	}
-	snprintf(temp_filepath2,PATH_MAX,"%s/%s", sort_dir, *(char **)b);
+	snprintf(temp_filepath2,allocSize+1,"%s/%s", sort_dir, *(char **)b);
 
 	free(temp_filepath1);
 	free(temp_filepath2);
@@ -207,10 +207,11 @@ void initWindows(void) {
 }
 
 int isRegularFile(const char *path) {
-	struct stat path_stat;
-	stat(path, &path_stat);
-	return S_ISREG(path_stat.st_mode);
+	struct stat st;
+	if (stat(path, &st) != 0) return 0;
+	return S_ISREG(st.st_mode);
 }
+
 
 void displayStatus(void) {
 	wmove(status_win,1,0);
@@ -528,6 +529,20 @@ void removeClipboard(char *filepath) {
 		exit(1);
 	}
 }
+
+// Empties the clipboard file and resets selection count
+void clearClipboard(void) {
+    FILE *f = fopen(clipboard_path, "w");
+    if (f == NULL) {
+        endwin();
+        printf("Couldn't open clipboard to clear!\n");
+        exit(1);
+    }
+    fclose(f);
+    selectedFiles = 0;
+}
+
+
 
 void getParentPath(char *path) {
 	char *p;
@@ -1305,85 +1320,109 @@ void getFileType(char *filepath) {
     getLastToken(".");
 }
 
-void getTextPreview(char *filepath, int maxx) {
-    // Don't Generate Preview if file size > 50MB
-    struct stat st;
-    stat(filepath, &st);
-    if(st.st_size > 10000000)
-        return;
 
-    char buf[250];
-
-    char *preview_path = NULL;
-    allocSize = snprintf(NULL, 0, "%s/preview", cache_path);
-    preview_path = malloc(allocSize+1);
-    if(preview_path == NULL) {
-        endwin();
-        printf("%s\n", "Couldn't allocate memory!");
-        exit(1);
+static int is_probably_text_file(const char *path) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    unsigned char buf[1024];
+    ssize_t n = read(fd, buf, sizeof buf);
+    close(fd);
+    if (n <= 0) return 0;
+    for (ssize_t i=0;i<n;i++) {
+        if (buf[i] == 0) return 0; // NUL suggests binary
     }
-    snprintf(preview_path, allocSize+1, "%s/preview", cache_path);
-
-    char mime[50];
-    getMIME(filepath, mime);
-    if(strcasecmp(mime,"application/x-executable\n") == 0 ||
-        strcasecmp(mime,"application/x-sharedlib\n") == 0 ||
-        strcasecmp(mime,"application/x-pie-executable\n") == 0) {
-        remove(preview_path);
-        pid_t pid = fork();
-        if(pid == 0) {
-            execlp("hexdump","hexdump",filepath,(char*)0);
-            exit(1);
-        } else {
-            int status;
-            waitpid(pid, &status, 0);
-            FILE *fp = fopen(preview_path, "r");
-            if(fp == NULL) {
-                free(preview_path);
-                return;
-            }
-            int t=0;
-            while(fgets(buf, 250, (FILE*) fp)) {
-                wmove(preview_win,t+1,2);
-                wprintw(preview_win,"%.*s",maxx-4,buf);
-                t++;
-            }
-            wrefresh(preview_win);
-            fclose(fp);
-        }
-        free(preview_path);
-        return;
-    }
-
-    pid_t pid = fork();
-    if(pid == 0) {
-        int fd = open("/dev/null", O_WRONLY);
-        dup2(fd,2);
-        execlp("cp","cp",filepath,preview_path,(char*)0);
-        exit(1);
-    } else {
-        int status;
-        waitpid(pid, &status, 0);
-    }
-
-    FILE *fp = fopen(filepath,"r");
-    if(fp == NULL) {
-        wmove(preview_win,1,2);
-        wprintw(preview_win,"%.*s",maxx-4,"Can't Access");
-        wrefresh(preview_win);
-        free(preview_path);
-        return;
-    }
-    int t=0;
-    while(fgets(buf, 250, (FILE*) fp)) {
-        wmove(preview_win,t+1,2);
-        wprintw(preview_win,"%.*s",maxx-4,buf);
-        t++;
-    }
-    wrefresh(preview_win);
-    free(preview_path);
-    fclose(fp);
+    return 1;
 }
+
+static void render_text_preview(const char *path, int maxx) {
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        wmove(preview_win, 1, 2);
+        wprintw(preview_win, "%.*s", maxx-4, "Can't open file");
+        wrefresh(preview_win);
+        return;
+    }
+    char line[4096];
+    int rows, cols;
+    getmaxyx(preview_win, rows, cols);
+    int max_lines = TEXT_PREVIEW_LINES;
+    int y = 1;
+    for (int i=0; i<max_lines && fgets(line, sizeof line, fp); ++i) {
+        wmove(preview_win, y++, 2);
+        wprintw(preview_win, "%.*s", maxx-4, line);
+    }
+    fclose(fp);
+    wrefresh(preview_win);
+}
+
+static void render_hex_preview(const char *path, int maxx) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) {
+        wmove(preview_win, 1, 2);
+        wprintw(preview_win, "%.*s", maxx-4, "Can't open file");
+        wrefresh(preview_win);
+        return;
+    }
+    int rows, cols;
+    getmaxyx(preview_win, rows, cols);
+    int avail_lines = rows - 2;
+    if (avail_lines < 1) avail_lines = 1;
+    size_t bytes_per_line = 16;
+    size_t max_bytes = (size_t)avail_lines * bytes_per_line;
+    unsigned char *buf = (unsigned char*)malloc(max_bytes);
+    if (!buf) {
+        fclose(fp);
+        wmove(preview_win, 1, 2);
+        wprintw(preview_win, "%.*s", maxx-4, "Out of memory");
+        wrefresh(preview_win);
+        return;
+    }
+    size_t n = fread(buf, 1, max_bytes, fp);
+    fclose(fp);
+    size_t offset = 0;
+    int y = 1;
+    while (offset < n && y <= avail_lines) {
+        char ascii[17]; ascii[16] = '\0';
+        wmove(preview_win, y, 2);
+        // offset
+        wprintw(preview_win, "%08zx  ", offset);
+        // hex bytes
+        for (size_t i=0;i<bytes_per_line;i++) {
+            if (offset + i < n) {
+                unsigned char c = buf[offset+i];
+                wprintw(preview_win, "%02x ", (unsigned)c);
+                ascii[i] = (c>=32 && c<=126) ? c : '.';
+            } else {
+                wprintw(preview_win, "   ");
+                ascii[i] = ' ';
+            }
+            if (i == 7) wprintw(preview_win, " ");
+        }
+        wprintw(preview_win, " |%s|", ascii);
+        y++;
+        offset += bytes_per_line;
+    }
+    free(buf);
+    wrefresh(preview_win);
+}
+
+
+void getTextPreview(char *filepath, int maxx) {
+    struct stat st;
+    if (stat(filepath, &st) != 0) return;
+    if ((size_t)st.st_size > MAX_PREVIEW_BYTES) return;
+
+    // Clear preview area
+    werase(preview_win);
+    box(preview_win, 0, 0);
+
+    if (is_probably_text_file(filepath)) {
+        render_text_preview(filepath, maxx);
+    } else {
+        render_hex_preview(filepath, maxx);
+    }
+}
+
 
 void getPreview(char *filepath, int maxy, int maxx) {
     getFileType(filepath);

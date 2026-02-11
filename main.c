@@ -17,16 +17,15 @@ int main(int argc, char* argv[]) {
         }
         char* directories[temp_len];
 
-        int status;
-        status = getFiles(dir, directories);
-
-        if( status == -1 ) {
-            endwin();
-            printf("Couldn't open \'%s\'", dir);
-            exit(1);
-        }
-
-        allocSize = snprintf(NULL,0,"%s",dir);
+        int filled;
+filled = getFiles(dir, directories);
+if (filled == -1) {
+    endwin();
+    printf("Couldn't open '%s'", dir);
+    exit(1);
+}
+if (filled < len) len = filled;
+allocSize = snprintf(NULL,0,"%s",dir);
         sort_dir = malloc(allocSize+1);
         if(sort_dir == NULL){
             endwin();
@@ -141,9 +140,10 @@ int main(int argc, char* argv[]) {
             exit(1);
         }
 
-        status = getFiles(next_dir, next_directories);
+                filled = getFiles(next_dir, next_directories);
+        if (filled < len_preview) len_preview = filled;
 
-        free(sort_dir);
+free(sort_dir);
         if(len_preview > 0){
             allocSize = snprintf(NULL,0,"%s",next_dir);
             sort_dir = malloc(allocSize+1);
@@ -278,8 +278,10 @@ int main(int argc, char* argv[]) {
                 break;
 
             case KEY_EMPTYSEL:
-                selectedFiles = 0;
-                break;
+                
+                clearClipboard();
+                setSelectionCount();
+break;
 
             case KEY_PASTE:
                 copyFiles(dir);
@@ -339,8 +341,8 @@ int main(int argc, char* argv[]) {
         for(i=0; i<len; i++) {
             free(directories[i]);
         }
-        if(len <= 0)
-            free(directories[0]);
+        // removed invalid free when len<=0
+        // if(len <= 0) free(directories[0]);
         free(next_directories);
     }
 
