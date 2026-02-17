@@ -45,10 +45,13 @@
 # Kernel Module Compile Results
 *.mod*
 *.cmd
+*.diff
+*.patch
+
 .tmp_versions/
 modules.order
 Module.symvers
-Mkfile.old
+Makfile.old
 dkms.conf
 c
 cfl

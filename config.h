@@ -129,6 +129,6 @@
 #define KEY_UPDATE 'u'
 
 // Quit
-#define KEY_ESCAPE 'q'
+#define KEY_ESCAPE 'Q'
 
 #define KEY_DIR 'n'

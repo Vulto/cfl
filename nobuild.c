@@ -2,9 +2,6 @@
 #include "./nobuild.h"
 
 #define MAIN "main.c"
-#define PREVIEW "preview.c"
-#define BOOK "bookmark.c"
-
 #define MAINOBJ "main.o"
 
 #define BIN "cfl"

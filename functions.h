@@ -64,53 +64,44 @@ char *path;
 FILE *fp;
 
 
-void clearImg(void);
 // Ueberzug++ helpers (declared here because functions.h is included before their definitions)
-static void ueberzugpp_start_once(void);
-static void ueberzugpp_add(const char *img_path);
-static void ueberzugpp_remove(void);
-static void ueberzugpp_stop(void);
 void initWindows(void);
 void openFile(char *filepath);
 void getLastToken(char *tokenizer);
+void displayAlert(char *message);
+int isRegularFile(const char *path);
+
+#include "bookmark.h"
+#include "preview.h"
 void cursesInit(void) {
 	initscr();
 	noecho();
 	curs_set(0);
+	if (has_colors()) {
+		start_color();
+		use_default_colors();
+		init_pair(1, COLOR_BLACK, COLOR_WHITE);
+		init_pair(2, COLOR_WHITE, 8);
+	}
 }
 
-int getNumberofFiles(char* directory) {
-	int len=0;
-	DIR *pDir;
-	struct dirent *pDirent;
-
-	pDir = opendir (directory);
-	if (pDir == NULL) {
-		return -1;
-	}
-
-	while ((pDirent = readdir(pDir)) != NULL) {
-		if( strcmp(pDirent->d_name,".") != 0 &&
-				strcmp(pDirent->d_name,"..") != 0 ) {
-			if( pDirent->d_name[0] == '.' )
-				if( hiddenFlag == 0 ) {
-					continue;
-				}
-			len++;
-		}
-	}
-	closedir (pDir);
-	return len;
-}
-
-int getFiles(char* directory, char* target[]) {
+int getFiles(char* directory, char*** target) {
 	int i = 0;
+	int capacity = 16;
 	DIR *pDir;
 	struct dirent *pDirent;
+	char **result;
 
 	pDir = opendir (directory);
 	if (pDir == NULL) {
 		return -1;
+	}
+
+	result = malloc((size_t)capacity * sizeof(char *));
+	if(result == NULL) {
+		closedir(pDir);
+		displayAlert("Couldn't allocate memory!");
+		exit(1);
 	}
 
 	while ((pDirent = readdir(pDir)) != NULL) {
@@ -119,16 +110,28 @@ int getFiles(char* directory, char* target[]) {
 			if( pDirent->d_name[0] == '.' )
 				if( hiddenFlag == 0 )
 					continue;
-			target[i] = strdup(pDirent->d_name);
-			if(target[i++] == NULL) {
-				endwin();
-				printf("%s\n", "Couldn't allocate memory!");
+			if(i >= capacity) {
+				capacity *= 2;
+				char **grown = realloc(result, (size_t)capacity * sizeof(char *));
+				if(grown == NULL) {
+					closedir(pDir);
+					displayAlert("Couldn't allocate memory!");
+					exit(1);
+				}
+				result = grown;
+			}
+
+			result[i] = strdup(pDirent->d_name);
+			if(result[i++] == NULL) {
+				closedir(pDir);
+				displayAlert("Couldn't allocate memory!");
 				exit(1);
 			}
 		}
 	}
 
 	closedir (pDir);
+	*target = result;
 	return i;
 }
 
@@ -153,8 +156,15 @@ int compare (const void * a, const void * b ) {
 	}
 	snprintf(temp_filepath2,allocSize+1,"%s/%s", sort_dir, *(char **)b);
 
+	int is_dir1 = (isRegularFile(temp_filepath1) == 0);
+	int is_dir2 = (isRegularFile(temp_filepath2) == 0);
+
 	free(temp_filepath1);
 	free(temp_filepath2);
+
+	if (is_dir1 != is_dir2) {
+		return is_dir2 - is_dir1;
+	}
 	return strcasecmp(*(char **)a, *(char **)b);
 }
 
@@ -631,17 +641,17 @@ void removeFiles(void){
 	remove(clipboard_path);
 }
 
-void renameFiles(char *directories){
+void renameFiles(char **directories){
 	if( access( clipboard_path, F_OK ) == -1 ){
 		free(temp_dir);
-		allocSize = snprintf(NULL,0,"%s/%c",dir,directories[selection]);
+		allocSize = snprintf(NULL,0,"%s/%s",dir,directories[selection]);
 		temp_dir = malloc(allocSize+1);
 		if(temp_dir == NULL){
 			endwin();
 			fprintf(stderr, "%s\n", "Couldn't allocate memory!");
 			exit(1);
 		}
-		snprintf(temp_dir,allocSize+1,"%s/%c",dir,directories[selection]);
+		snprintf(temp_dir,allocSize+1,"%s/%s",dir,directories[selection]);
 		char *temp = strdup(temp_dir);
 		if(temp == NULL){
 			endwin();
@@ -900,67 +910,61 @@ void getLastToken(char *tokenizer) {
 	}
 }
 
-void getScripts(char* directories) {
+void getScripts(char** directories) {
 	int pid;
-	len_scripts = getNumberofFiles(scripts_path);
+	char **scripts = NULL;
+	len_scripts = getFiles(scripts_path, &scripts);
 	if(len_scripts <= 0) {
 		displayAlert("No scripts found!");
-	} else {
-		clearImg();
-		int status;
-		char* scripts[len_scripts];
-		status = getFiles(scripts_path, scripts);
-		if(status == -1){
-			displayAlert("Cannot fetch scripts!");
-			sleep(1);
-			return;
-		}
-		keys_win = newwin(len_scripts+1, maxx, maxy-len_scripts, 0);
-		wprintw(keys_win,"%s\t%s\n", "S.No.", "Name");
-		for(i=0; i<len_scripts; i++){
-			wprintw(keys_win, "%d\t%s\n", i+1, scripts[i]);
-		}
-		secondKey = wgetch(keys_win);
-		int option = secondKey - '0';
-		option--;
-		if(option < len_scripts && option >= 0) {
-			free(temp_dir);
-			allocSize = snprintf(NULL, 0, "%s/%s", scripts_path, scripts[option]);
-			temp_dir = malloc(allocSize+1);
-			if(temp_dir == NULL) {
-				endwin();
-				printf("%s\n", "Couldn't allocate memory!");
-				exit(1);
-			}
-			snprintf(temp_dir, allocSize+1, "%s/%s", scripts_path, scripts[option]);
-
-			allocSize = snprintf(NULL, 0, "%s/%c", dir, directories[selection]);
-			buf = malloc(allocSize+1);
-			if(buf == NULL) {
-				endwin();
-				printf("%s\n", "Couldn't allocate memory!");
-				exit(1);
-			}
-			snprintf(buf, allocSize+1, "%s/%c", dir, directories[selection]);
-
-			endwin();
-			pid = fork();
-			if( pid == 0 ) {
-				chdir(dir);
-				execl(temp_dir, scripts[option], buf, (char *)0);
-				exit(1);
-			} else {
-				int status;
-				waitpid(pid, &status, 0);
-			}
-
-			free(buf);
-			refresh();
-		}
-		for(i=0; i<len_scripts; i++) {
-			free(scripts[i]);
-		}
+		if (scripts) free(scripts);
+		return;
 	}
+
+	clearImg();
+	keys_win = newwin(len_scripts+1, maxx, maxy-len_scripts, 0);
+	wprintw(keys_win,"%s\t%s\n", "S.No.", "Name");
+	for(i=0; i<len_scripts; i++){
+		wprintw(keys_win, "%d\t%s\n", i+1, scripts[i]);
+	}
+	secondKey = wgetch(keys_win);
+	int option = secondKey - '0';
+	option--;
+	if(option < len_scripts && option >= 0) {
+		free(temp_dir);
+		allocSize = snprintf(NULL, 0, "%s/%s", scripts_path, scripts[option]);
+		temp_dir = malloc(allocSize+1);
+		if(temp_dir == NULL) {
+			displayAlert("Couldn't allocate memory!");
+			exit(1);
+		}
+		snprintf(temp_dir, allocSize+1, "%s/%s", scripts_path, scripts[option]);
+
+		allocSize = snprintf(NULL, 0, "%s/%s", dir, directories[selection]);
+		buf = malloc(allocSize+1);
+		if(buf == NULL) {
+			displayAlert("Couldn't allocate memory!");
+			exit(1);
+		}
+		snprintf(buf, allocSize+1, "%s/%s", dir, directories[selection]);
+
+		endwin();
+		pid = fork();
+		if( pid == 0 ) {
+			chdir(dir);
+			execl(temp_dir, scripts[option], buf, (char *)0);
+			exit(1);
+		} else {
+			int status;
+			waitpid(pid, &status, 0);
+		}
+
+		free(buf);
+		refresh();
+	}
+	for(i=0; i<len_scripts; i++) {
+		free(scripts[i]);
+	}
+	free(scripts);
 }
 
 void searchAll(FILE *fp, char *path, pid_t pid, int fd) {
@@ -1244,7 +1248,6 @@ void WrappeUp(void) {
 }
 
 void CreateDir() {
-
 	int height = 3, width = 50;
 	int startY = (LINES - height) / 2;
 	int startX = (COLS - width) / 2;
@@ -1258,294 +1261,21 @@ void CreateDir() {
 	echo();
 	mvwgetnstr(subWin, 1, 22, dirName, 255);
 	noecho();
+	delwin(subWin);
 
-	werase(subWin);
-	box(subWin, 0, 0);
-	if (mkdir(dirName, 0755) == 0) {
-		mvwprintw(subWin, 1, 1, "Directory '%s' created", dirName);
-	} else {
-		mvwprintw(subWin, 1, 1, "Error creating directory '%s'", dirName);
+	if (strlen(dirName) == 0) {
+		displayAlert("Directory name cannot be empty");
+		return;
 	}
 
-	wrefresh(subWin);
-	getch();
-	endwin();
+	char fullPath[PATH_MAX];
+	snprintf(fullPath, sizeof(fullPath), "%s/%s", dir, dirName);
+	if (mkdir(fullPath, 0755) == 0) {
+		displayAlert("Directory created");
+	} else {
+		displayAlert("Error creating directory");
+	}
 }
-
-// preview functions bellow
-
-#include <magic.h>
-
-void getMIME(const char *filepath, char mime[50]) {
-    // Initialize magic cookie
-    magic_t magic = magic_open(MAGIC_MIME_TYPE);
-    if (magic == NULL) {
-        fprintf(stderr, "magic_open failed\n");
-        return;
-    }
-
-    // Load default magic database
-    if (magic_load(magic, NULL) != 0) {
-        fprintf(stderr, "magic_load failed: %s\n", magic_error(magic));
-        magic_close(magic);
-        return;
-    }
-
-    // Get MIME type of the file
-    const char *mime_type = magic_file(magic, filepath);
-    if (mime_type == NULL) {
-        fprintf(stderr, "magic_file failed: %s\n", magic_error(magic));
-        magic_close(magic);
-        return;
-    }
-
-    // Copy MIME type or primary type
-    if (strncmp(mime_type, "app", 3) == 0) {
-        snprintf(mime, 50, "%s", mime_type);
-    } else {
-        const char *slash_pos = strchr(mime_type, '/');
-        if (slash_pos != NULL) {
-            snprintf(mime, slash_pos - mime_type + 1, "%s", mime_type);
-        } else {
-            snprintf(mime, 50, "%s", mime_type);
-        }
-    }
-}
-
-void getFileType(char *filepath) {
-    allocSize = snprintf(NULL,0,"%s",filepath);
-    temp_dir = malloc(allocSize+1);
-    if(temp_dir == NULL) {
-        endwin();
-        printf("%s\n", "Couldn't allocate memory!");
-        exit(1);
-    }
-    snprintf(temp_dir,allocSize+1,"%s", filepath);
-    getLastToken(".");
-}
-
-
-static int is_probably_text_file(const char *path) {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return 0;
-    unsigned char buf[1024];
-    ssize_t n = read(fd, buf, sizeof buf);
-    close(fd);
-    if (n <= 0) return 0;
-    for (ssize_t i=0;i<n;i++) {
-        if (buf[i] == 0) return 0; // NUL suggests binary
-    }
-    return 1;
-}
-
-static void render_text_preview(const char *path, int maxx) {
-    FILE *fp = fopen(path, "r");
-    if (!fp) {
-        wmove(preview_win, 1, 2);
-        wprintw(preview_win, "%.*s", maxx-4, "Can't open file");
-        wrefresh(preview_win);
-        return;
-    }
-    char line[4096];
-    int rows, cols;
-    getmaxyx(preview_win, rows, cols);
-    int max_lines = TEXT_PREVIEW_LINES;
-    int y = 1;
-    for (int i=0; i<max_lines && fgets(line, sizeof line, fp); ++i) {
-        wmove(preview_win, y++, 2);
-        wprintw(preview_win, "%.*s", maxx-4, line);
-    }
-    fclose(fp);
-    wrefresh(preview_win);
-}
-
-static void render_hex_preview(const char *path, int maxx) {
-    FILE *fp = fopen(path, "rb");
-    if (!fp) {
-        wmove(preview_win, 1, 2);
-        wprintw(preview_win, "%.*s", maxx-4, "Can't open file");
-        wrefresh(preview_win);
-        return;
-    }
-    int rows, cols;
-    getmaxyx(preview_win, rows, cols);
-    int avail_lines = rows - 2;
-    if (avail_lines < 1) avail_lines = 1;
-    size_t bytes_per_line = 16;
-    size_t max_bytes = (size_t)avail_lines * bytes_per_line;
-    unsigned char *buf = (unsigned char*)malloc(max_bytes);
-    if (!buf) {
-        fclose(fp);
-        wmove(preview_win, 1, 2);
-        wprintw(preview_win, "%.*s", maxx-4, "Out of memory");
-        wrefresh(preview_win);
-        return;
-    }
-    size_t n = fread(buf, 1, max_bytes, fp);
-    fclose(fp);
-    size_t offset = 0;
-    int y = 1;
-    while (offset < n && y <= avail_lines) {
-        char ascii[17]; ascii[16] = '\0';
-        wmove(preview_win, y, 2);
-        // offset
-        wprintw(preview_win, "%08zx  ", offset);
-        // hex bytes
-        for (size_t i=0;i<bytes_per_line;i++) {
-            if (offset + i < n) {
-                unsigned char c = buf[offset+i];
-                wprintw(preview_win, "%02x ", (unsigned)c);
-                ascii[i] = (c>=32 && c<=126) ? c : '.';
-            } else {
-                wprintw(preview_win, "   ");
-                ascii[i] = ' ';
-            }
-            if (i == 7) wprintw(preview_win, " ");
-        }
-        wprintw(preview_win, " %s", ascii);
-        y++;
-        offset += bytes_per_line;
-    }
-    free(buf);
-    wrefresh(preview_win);
-}
-
-
-void getTextPreview(char *filepath, int maxx) {
-    struct stat st;
-    if (stat(filepath, &st) != 0) return;
-    if ((size_t)st.st_size > MAX_PREVIEW_BYTES) return;
-
-    if (is_probably_text_file(filepath)) {
-        render_text_preview(filepath, maxx);
-    } else {
-        render_hex_preview(filepath, maxx);
-    }
-}
-
-
-void getPreview(char *filepath, int maxy, int maxx) {
-    (void)maxy;
-    (void)maxx;
-    getFileType(filepath);
-    if (strcasecmp("jpg", last) == 0 ||
-        strcasecmp("png", last) == 0 ||
-        strcasecmp("gif", last) == 0 ||
-        strcasecmp("jpeg", last) == 0) {
-        ueberzugpp_add(filepath);
-        clearFlagImg = 1;
-    } else {
-        ueberzugpp_remove();
-        getTextPreview(filepath, maxx);
-    }
-}
-
-
-/* GenImgPreview removed: using ueberzugpp IPC */
-
-// ---- Ueberzug++ integration (image previews) ----
-static pid_t ueberzug_pid = -1;
-static FILE *ueberzug_in = NULL;
-static int ueberzug_failed = 0;
-
-static void ueberzugpp_start_once(void) {
-    if (ueberzug_in != NULL || ueberzug_failed) return;
-
-    int pipefd[2];
-    if (pipe(pipefd) != 0) {
-        ueberzug_failed = 1;
-        return;
-    }
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        close(pipefd[0]);
-        close(pipefd[1]);
-        ueberzug_failed = 1;
-        return;
-    }
-
-    if (pid == 0) {
-        // child: stdin <- pipe read end
-        dup2(pipefd[0], STDIN_FILENO);
-        close(pipefd[0]);
-        close(pipefd[1]);
-
-        // Detach from ncurses output (ueberzugpp renders independently)
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0) {
-            dup2(devnull, STDOUT_FILENO);
-            dup2(devnull, STDERR_FILENO);
-            close(devnull);
-        }
-
-        execlp(UEBERZUGPP_BIN, UEBERZUGPP_BIN, "layer", "-o", UEBERZUGPP_OUTPUT, (char *)NULL);
-        _exit(127);
-    }
-
-    // parent
-    close(pipefd[0]);
-    ueberzug_pid = pid;
-    ueberzug_in = fdopen(pipefd[1], "w");
-    if (!ueberzug_in) {
-        close(pipefd[1]);
-        ueberzug_failed = 1;
-        ueberzug_pid = -1;
-        return;
-    }
-    setvbuf(ueberzug_in, NULL, _IOLBF, 0); // line buffered
-}
-
-static void ueberzugpp_remove(void) {
-    if (!ueberzug_in) return;
-    fprintf(ueberzug_in, "{\"action\":\"remove\",\"identifier\":\"%s\"}\n", UEBERZUGPP_IDENTIFIER);
-    fflush(ueberzug_in);
-}
-
-static void ueberzugpp_add(const char *img_path) {
-    if (!img_path) return;
-
-    ueberzugpp_start_once();
-    if (!ueberzug_in) return;
-
-    int win_y, win_x, win_h, win_w;
-    getbegyx(preview_win, win_y, win_x);
-    getmaxyx(preview_win, win_h, win_w);
-
-    // Small padding to avoid clobbering UI boundaries
-    int x = win_x + 1;
-    int y = win_y + 1;
-    int w = win_w - 2;
-    int h = win_h - 2;
-
-    if (w <= 0 || h <= 0) return;
-
-    // Replace previous image in-place
-    ueberzugpp_remove();
-
-    // JSON IPC expects cell coordinates and size in cells
-    fprintf(ueberzug_in,
-            "{\"action\":\"add\",\"identifier\":\"%s\",\"path\":\"%s\",\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d}\n",
-            UEBERZUGPP_IDENTIFIER, img_path, x, y, w, h);
-    fflush(ueberzug_in);
-}
-
-static void ueberzugpp_stop(void) {
-    if (ueberzug_in) {
-        ueberzugpp_remove();
-        fclose(ueberzug_in);
-        ueberzug_in = NULL;
-    }
-    if (ueberzug_pid > 0) {
-        kill(ueberzug_pid, SIGTERM);
-        // Best effort wait; don't hang if already reaped
-        waitpid(ueberzug_pid, NULL, WNOHANG);
-        ueberzug_pid = -1;
-    }
-}
-// ---- end Ueberzug++ integration ----
-
-
 
 void viewPreview(void) {
     FILE *file;
@@ -1612,11 +1342,6 @@ void viewPreview(void) {
     free(buffer);
     free(preview_path);
     refresh();
-}
-
-void clearImg() {
-    // Remove current image preview (if any)
-    ueberzugpp_remove();
 }
 
 
