@@ -85,6 +85,24 @@ void cursesInit(void) {
 	}
 }
 
+void handleResize(void) {
+	endwin();
+	refresh();                    /* ncurses reads new LINES/COLS */
+
+	getmaxyx(stdscr, maxy, maxx);
+	maxy = maxy - 2;
+
+	/* clean old windows */
+	if (status_win)  delwin(status_win);
+	if (current_win) delwin(current_win);
+	if (preview_win) delwin(preview_win);
+	if (keys_win)    delwin(keys_win);
+
+	status_win = current_win = preview_win = keys_win = NULL;
+
+	initWindows();
+}
+
 int getFiles(char* directory, char*** target) {
 	int i = 0;
 	int capacity = 16;

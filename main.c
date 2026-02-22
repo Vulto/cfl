@@ -143,7 +143,10 @@ int main(int argc, char* argv[]) {
         int fd = 0;
         int pfd[2];
 
-        switch( ch = wgetch(current_win) ){
+        switch( ch = wgetch(current_win) ) {
+            case KEY_RESIZE:
+                handleResize();
+                break;
             case KEY_NAVUP: scrollUp(); break;
             case KEY_NAVDOWN: scrollDown(); break;
             case KEY_NAVNEXT:
