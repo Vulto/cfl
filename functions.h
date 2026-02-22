@@ -154,31 +154,14 @@ int getFiles(char* directory, char*** target) {
 }
 
 int compare (const void * a, const void * b ) {
-	char *temp_filepath1 = NULL;
-	char *temp_filepath2 = NULL;
+	char temp_filepath1[PATH_MAX];
+	char temp_filepath2[PATH_MAX];
 
-	allocSize = snprintf(NULL,0,"%s/%s", sort_dir, *(char **)a);
-	temp_filepath1 = malloc(allocSize+1);
-	if(temp_filepath1 == NULL) {
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(temp_filepath1,allocSize+1,"%s/%s", sort_dir, *(char **)a);
-	allocSize = snprintf(NULL,0,"%s/%s", sort_dir, *(char **)b);
-	temp_filepath2 = malloc(allocSize+1);
-	if(temp_filepath2 == NULL) {
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(temp_filepath2,allocSize+1,"%s/%s", sort_dir, *(char **)b);
+	snprintf(temp_filepath1, sizeof(temp_filepath1), "%s/%s", sort_dir, *(char **)a);
+	snprintf(temp_filepath2, sizeof(temp_filepath2), "%s/%s", sort_dir, *(char **)b);
 
 	int is_dir1 = (isRegularFile(temp_filepath1) == 0);
 	int is_dir2 = (isRegularFile(temp_filepath2) == 0);
-
-	free(temp_filepath1);
-	free(temp_filepath2);
 
 	if (is_dir1 != is_dir2) {
 		return is_dir2 - is_dir1;
