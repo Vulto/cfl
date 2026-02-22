@@ -212,9 +212,15 @@ void handleFlags(char** directories) {
 }
 
 void initWindows(void) {
-	current_win = newwin(maxy, maxx/2+2, 0, 0);
-	preview_win = newwin(maxy, maxx/2-1, 0, maxx/2+1);
-	status_win = newwin(2, maxx, maxy, 0);
+	/* Status / info bar at the very top.
+	 * Two lines: line 0 = info, line 1 = blank separator. */
+	status_win = newwin(2, maxx, 0, 0);
+
+	/* Main panes start below the status bar */
+	starty = 2;
+	current_win = newwin(maxy, maxx/2+2, starty, 0);
+	preview_win = newwin(maxy, maxx/2-1, starty, maxx/2+1);
+
 	keypad(current_win, TRUE);
 	sigprocmask(SIG_UNBLOCK, &x, NULL);
 }
@@ -227,7 +233,8 @@ int isRegularFile(const char *path) {
 
 
 void displayStatus(void) {
-	wmove(status_win,1,0);
+	wclear(status_win);
+	wmove(status_win,0,0);
 	if(SHOW_SELECTION_COUNT == 1) {
 		wprintw(status_win,"[%d] ", selectedFiles);
 	}
@@ -238,6 +245,7 @@ void displayStatus(void) {
 	} else {
 		wprintw(status_win, "/%s", selected_file);
 	}
+	/* line 1 intentionally left blank as a separator */
 	wrefresh(status_win);
 }
 
@@ -921,7 +929,7 @@ void getScripts(char** directories) {
 	}
 
 	clearImg();
-	keys_win = newwin(len_scripts+1, maxx, maxy-len_scripts, 0);
+	keys_win = newwin(len_scripts+1, maxx, starty + maxy - len_scripts - 1, 0);
 	wprintw(keys_win,"%s\t%s\n", "S.No.", "Name");
 	for(i=0; i<len_scripts; i++){
 		wprintw(keys_win, "%d\t%s\n", i+1, scripts[i]);
@@ -1158,7 +1166,7 @@ void goShell(pid_t pid) {
 
 void Deleting(void) {
 	if( fileExists(clipboard_path) == 1 ) {
-		keys_win = newwin(3, maxx, maxy-3, 0);
+		keys_win = newwin(3, maxx, starty + maxy - 3, 0);
 		wprintw(keys_win,"Key\tCommand");
 		wprintw(keys_win,"\n%c\tMove to Garbage Can", KEY_GARBAGE);
 		wprintw(keys_win,"\n%c\tDelete", KEY_DELETE);

@@ -68,7 +68,7 @@ int main(int argc, char* argv[]) {
                 wattroff( current_win, A_BOLD );
             }
 
-            wmove( current_win,t+1,2 );
+            wmove( current_win,t,2 );
 
             if( checkClipboard( temp_dir ) == 0 ) {
                 wprintw( current_win, "%.*s\n", maxx/2, directories[i] );

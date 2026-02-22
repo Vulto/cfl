@@ -36,7 +36,7 @@ static void ueberzugpp_start_once(void) {
             close(devnull);
         }
 
-        execlp(UEBERZUGPP_BIN, UEBERZUGPP_BIN, "layer", "-o", UEBERZUGPP_OUTPUT, (char *)NULL);
+        execlp(UEBERZUGPP_BIN, UEBERZUGPP_BIN, "layer", "--no-cache", "-o", UEBERZUGPP_OUTPUT, (char *)NULL);
         _exit(127);
     }
 
