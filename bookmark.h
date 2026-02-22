@@ -83,36 +83,29 @@ static void bookmark_remove(char key) {
 }
 
 static void go_bookmark(void) {
-    WINDOW *sub = newwin(3, 48, (LINES - 3) / 2, (COLS - 48) / 2);
-    box(sub, 0, 0);
-    mvwprintw(sub, 1, 1, "Jump to bookmark key: ");
-    wrefresh(sub);
+	WINDOW *sub = newwin(3, 48, (LINES - 3) / 2, (COLS - 48) / 2);
+	box(sub, 0, 0);
+	mvwprintw(sub, 1, 1, "Jump to bookmark key: ");
+	wrefresh(sub);
 
-    int key = wgetch(sub);
-    delwin(sub);
+	int key = wgetch(sub);
+	delwin(sub);
 
-    char target[PATH_MAX];
-    if (!bookmark_find((char)key, target, sizeof(target))) {
-        displayAlert("Bookmark not found");
-        return;
-    }
+	char target[PATH_MAX];
+	if (!bookmark_find((char)key, target, sizeof(target))) {
+		displayAlert("Bookmark not found");
+		return;
+	}
 
-    struct stat st;
-    if (stat(target, &st) != 0 || !S_ISDIR(st.st_mode)) {
-        displayAlert("Bookmark target is not a directory");
-        return;
-    }
+	struct stat st;
+	if (stat(target, &st) != 0 || !S_ISDIR(st.st_mode)) {
+		displayAlert("Bookmark target is not a directory");
+		return;
+	}
 
-    free(dir);
-    allocSize = snprintf(NULL, 0, "%s", target);
-    dir = malloc((size_t)allocSize + 1);
-    if (!dir) {
-        displayAlert("Couldn't allocate memory!");
-        exit(1);
-    }
-    snprintf(dir, (size_t)allocSize + 1, "%s", target);
-    selection = 0;
-    start = 0;
+	snprintf(dir, sizeof(dir), "%s", target);
+	selection = 0;
+	start = 0;
 }
 
 static void add_bookmark(void) {

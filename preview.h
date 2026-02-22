@@ -134,7 +134,11 @@ static void render_text_preview(const char *path, int maxx) {
     char line[4096];
     int rows, cols;
     getmaxyx(preview_win, rows, cols);
+    (void)cols;
     int max_lines = TEXT_PREVIEW_LINES;
+    int avail_lines = rows - 2;
+    if (avail_lines < 1) avail_lines = 1;
+    if (max_lines > avail_lines) max_lines = avail_lines;
     int y = 1;
     wclear(preview_win);
     for (int i = 0; i < max_lines && fgets(line, sizeof line, fp); ++i) {
