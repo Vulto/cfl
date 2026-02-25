@@ -147,9 +147,9 @@ int main(int argc, char* argv[]) {
             case KEY_BOTTOM: goBOTTOM(); break;
             case KEY_MID: goMID(); break;
             case KEY_SHELL:
-                clearImg(); endwin(); goShell(pid); start = 0; selection = 0; refresh(); break;
+                ueberzugpp_remove(); endwin(); goShell(pid); start = 0; selection = 0; refresh(); break;
             case KEY_RENAME:
-                clearImg(); renameFiles(directories); selectedFiles = 0; break;
+                ueberzugpp_remove(); renameFiles(directories); selectedFiles = 0; break;
             case KEY_SEL: {
                 if (len <= 0) { break; }
                 if (build_path(temp_dir, sizeof temp_dir, dir, directories[selection]) != 0) {
@@ -167,13 +167,11 @@ int main(int argc, char* argv[]) {
             case KEY_EMPTYSEL: clearClipboard(); setSelectionCount(); break;
             case KEY_PASTE: copyFiles(dir); break;
             case KEY_MV: moveFiles(dir); selectedFiles = 0; break;
-            case KEY_REMOVEMENU: clearImg(); Deleting(); break;
+            case KEY_REMOVEMENU: ueberzugpp_remove(); Deleting(); break;
             case KEY_VIEWSEL: endwin(); ViewSel(pid); break;
             case KEY_EDITSEL: EditSel(pid); break;
             case KEY_INFO: clearFlagImg = 1; break;
             case KEY_TOGGLEHIDE: hiddenFlag = !hiddenFlag; start = 0; selection = 0; break;
-            case KEY_PREVIEW: viewPreview(); break;
-            case KEY_SCRIPT: getScripts(directories); break;
             case KEY_BOOKMARK: go_bookmark(); break;
             case KEY_ADDBOOKMARK: add_bookmark(); break;
             case KEY_RMBOOKMARK: remove_bookmark_prompt(); break;

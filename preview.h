@@ -3,9 +3,11 @@
 
 #include <ctype.h>
 
+int len_preview = 0;
 static pid_t ueberzug_pid = -1;
 static FILE *ueberzug_in = NULL;
 static int ueberzug_failed = 0;
+int clearFlagImg = 0;
 
 static void ueberzugpp_start_once(void) {
     if (ueberzug_in != NULL || ueberzug_failed) return;
@@ -238,8 +240,17 @@ static void getPreview(char *filepath, int maxy, int maxx) {
     }
 }
 
-static void clearImg(void) {
-    ueberzugpp_remove();
+void PreviewNextDir(char *next_dir_arg, char **next_directories) {
+    for(int i=0; i<len_preview; i++ ) {
+        if(i == maxy - 1) break;
+        wmove(preview_win,i+1,2);
+        snprintf(temp_dir, sizeof(temp_dir), "%s/%s", next_dir_arg, next_directories[i]);
+        if( isRegularFile(temp_dir) == 0 ){
+            wattron(preview_win, A_BOLD);
+        } else {
+            wattroff(preview_win, A_BOLD);
+        }
+        wprintw(preview_win, "%.*s\n", maxx/2 - 3, next_directories[i]);
+    }
 }
-
 #endif

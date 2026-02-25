@@ -1,5 +1,6 @@
 #ifndef CFL_BOOKMARK_H
 #define CFL_BOOKMARK_H
+char* bookmarks_path = NULL;
 
 static int bookmark_find(char key, char *out_path, size_t out_size) {
     FILE *f = fopen(bookmarks_path, "r");

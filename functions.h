@@ -21,7 +21,6 @@
 sigset_t x;
 int raised_signal = -1;
 int len = 0;
-int len_preview = 0;
 int len_bookmarks = 0;
 int len_scripts = 0;
 int selectedFiles = 0;
@@ -41,18 +40,14 @@ char* pch = NULL;
 struct passwd *info;
 char* cache_path = NULL;
 char* clipboard_path = NULL;
-char* bookmarks_path = NULL;
-char* scripts_path = NULL;
 char* temp_clipboard_path = NULL;
 char* trash_path = NULL;
 int selection = 0;
 int start = 0;
 int clearFlag = 0;
-int clearFlagImg = 0;
 int searchFlag = 0;
 int backFlag = 0;
 int hiddenFlag = SHOW_HIDDEN;
-int pdfflag = SHOW_PDF_PREVIEWS;
 char* last = NULL;
 WINDOW* current_win;
 WINDOW* preview_win;
@@ -75,6 +70,7 @@ int isRegularFile(const char *path);
 
 #include "bookmark.h"
 #include "preview.h"
+
 void cursesInit(void) {
 	initscr();
 	noecho();
@@ -94,7 +90,6 @@ void handleResize(void) {
 	getmaxyx(stdscr, maxy, maxx);
 	maxy = maxy - 2;
 
-	/* clean old windows */
 	if (status_win)  delwin(status_win);
 	if (current_win) delwin(current_win);
 	if (preview_win) delwin(preview_win);
@@ -179,7 +174,9 @@ void handleFlags(char** directories) {
 	}
 
 	if(clearFlagImg == 1){
-		clearImg();
+		//clearImg();
+		ueberzugpp_remove();
+
 		clearFlagImg = 0;
 	}
 
@@ -215,11 +212,8 @@ void handleFlags(char** directories) {
 }
 
 void initWindows(void) {
-	/* Status / info bar at the very top.
-	 * Two lines: line 0 = info, line 1 = blank separator. */
 	status_win = newwin(2, maxx, 0, 0);
 
-	/* Main panes start below the status bar */
 	starty = 2;
 	current_win = newwin(maxy, maxx/2+2, starty, 0);
 	preview_win = newwin(maxy, maxx/2-1, starty, maxx/2+1);
@@ -233,7 +227,6 @@ int isRegularFile(const char *path) {
 	if (stat(path, &st) != 0) return 0;
 	return S_ISREG(st.st_mode);
 }
-
 
 void displayStatus(void) {
 	wclear(status_win);
@@ -374,14 +367,6 @@ void init(int argc, char* argv[]) {
 	}
 	snprintf(bookmarks_path,allocSize+1,"%s/bookmarks",cache_path);
 
-	allocSize = snprintf(NULL,0,"%s/scripts",cache_path);
-	scripts_path = malloc(allocSize+1);
-	if(scripts_path == NULL) {
-		printf("%s\n", "Couldn't initialize scripts path");
-		exit(1);
-	}
-	snprintf(scripts_path,allocSize+1,"%s/scripts",cache_path);
-
 	allocSize = snprintf(NULL,0,"%s/clipboard.tmp",cache_path);
 	temp_clipboard_path = malloc(allocSize+1);
 	if(temp_clipboard_path == NULL) {
@@ -397,10 +382,6 @@ void init(int argc, char* argv[]) {
 		exit(1);
 	}
 	snprintf(trash_path,allocSize+1,"%s/.local/share/trash",info->pw_dir);
-
-	if (stat(scripts_path, &st) == -1) {
-		mkdir(scripts_path, 0751);
-	}
 
 	char cwd[PATH_MAX];
 	if (getcwd(cwd, sizeof(cwd)) != NULL) {
@@ -430,7 +411,7 @@ void init(int argc, char* argv[]) {
 		setSelectionCount();
 	}
 }
-// Checks if a file exists
+
 int fileExists(char *file) {
 	if( access ( file, F_OK ) != -1 ) {
 		return EXIT_FAILURE;
@@ -509,7 +490,7 @@ void removeClipboard(char *filepath) {
 	if (f2 == NULL) {
 		endwin();
 		printf("Couldn't Create Temporary Clipboard File!\n");
-		fclose(f1); // Make sure to close the opened file before exiting
+		fclose(f1); 
 		exit(1);
 	}
 
@@ -522,7 +503,6 @@ void removeClipboard(char *filepath) {
 	fclose(f1);
 	fclose(f2);
 
-	// Rename the temporary file to overwrite the original clipboard file
 	if (rename(temp_clipboard_path, clipboard_path) != 0) {
 		endwin();
 		perror("Couldn't move temporary clipboard file");
@@ -530,7 +510,6 @@ void removeClipboard(char *filepath) {
 	}
 }
 
-// Empties the clipboard file and resets selection count
 void clearClipboard(void) {
     FILE *f = fopen(clipboard_path, "w");
     if (f == NULL) {
@@ -541,8 +520,6 @@ void clearClipboard(void) {
     fclose(f);
     selectedFiles = 0;
 }
-
-
 
 void getParentPath(char *path) {
 	char *p;
@@ -864,50 +841,6 @@ void getLastToken(char *tokenizer) {
 	}
 }
 
-void getScripts(char** directories) {
-	int pid;
-	char **scripts = NULL;
-	len_scripts = getFiles(scripts_path, &scripts);
-	if(len_scripts <= 0) {
-		displayAlert("No scripts found!");
-		if (scripts) free(scripts);
-		return;
-	}
-
-	clearImg();
-	keys_win = newwin(len_scripts+1, maxx, starty + maxy - len_scripts - 1, 0);
-	wprintw(keys_win,"%s\t%s\n", "S.No.", "Name");
-	for(i=0; i<len_scripts; i++){
-		wprintw(keys_win, "%d\t%s\n", i+1, scripts[i]);
-	}
-	secondKey = wgetch(keys_win);
-	int option = secondKey - '0';
-	option--;
-	if(option < len_scripts && option >= 0) {
-		snprintf(temp_dir, sizeof(temp_dir), "%s/%s", scripts_path, scripts[option]);
-
-		char buf[PATH_MAX];
-		snprintf(buf, sizeof(buf), "%s/%s", dir, directories[selection]);
-
-		endwin();
-		pid = fork();
-		if( pid == 0 ) {
-			chdir(dir);
-			execl(temp_dir, scripts[option], buf, (char *)0);
-			exit(1);
-		} else {
-			int status;
-			waitpid(pid, &status, 0);
-		}
-
-		refresh();
-	}
-	for(i=0; i<len_scripts; i++) {
-		free(scripts[i]);
-	}
-	free(scripts);
-}
-
 void goShell(pid_t pid) {
 	pid = fork();
 	if( pid == 0 ) {
@@ -956,7 +889,6 @@ void Deleting(void) {
 	}
 }
 
-
 void ViewSel(pid_t pid) {
 	if( access( clipboard_path, F_OK ) != -1 ) {
 		pid = fork();
@@ -994,24 +926,6 @@ void EditSel(pid_t pid) {
 	}
 }
 
-void WrappeUp(void) {
-	free(cache_path);
-	free(temp_clipboard_path);
-	free(clipboard_path);
-	free(bookmarks_path);
-	free(scripts_path);
-	free(trash_path);
-	free(editor);
-	free(shell);
-
-	if(last != NULL) {
-		free(last);
-	}
-	clearImg();
-	ueberzugpp_stop();
-	endwin();
-}
-
 void CreateDir() {
 	int height = 3, width = 50;
 	int startY = (LINES - height) / 2;
@@ -1042,74 +956,6 @@ void CreateDir() {
 	}
 }
 
-void viewPreview(void) {
-    FILE *file;
-    char *preview_path = NULL;
-    int allocSize;
-    size_t file_size;
-    char *buffer;
-    
-    // Calculate the size of the path string and allocate memory
-    allocSize = snprintf(NULL, 0, "%s/preview", cache_path);
-    if (allocSize < 0) {
-        endwin();
-        printf("Error calculating allocation size!\n");
-        exit(EXIT_FAILURE);
-    }
-
-    preview_path = (char *)malloc(allocSize + 1);
-    if (preview_path == NULL) {
-        endwin();
-        printf("Couldn't allocate memory!\n");
-        exit(EXIT_FAILURE);
-    }
-
-    if (snprintf(preview_path, allocSize + 1, "%s/preview", cache_path) < 0) {
-        endwin();
-        free(preview_path);
-        printf("Error formatting preview path!\n");
-        exit(EXIT_FAILURE);
-    }
-
-    endwin();
-
-    // Open the file for reading
-    file = fopen(preview_path, "r");
-    if (file == NULL) {
-        printf("Error opening preview file: %s\n", preview_path);
-        free(preview_path);
-        exit(EXIT_FAILURE);
-    }
-
-    // Determine the file size
-    fseek(file, 0, SEEK_END);
-    file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-
-    // Allocate buffer to hold the entire file contents
-    buffer = (char *)malloc(file_size + 1);
-    if (buffer == NULL) {
-        printf("Error allocating buffer memory\n");
-        fclose(file);
-        free(preview_path);
-        exit(EXIT_FAILURE);
-    }
-
-    // Read the file into the buffer
-    fread(buffer, 1, file_size, file);
-    buffer[file_size] = '\0'; // Null-terminate the string
-
-    // Print the contents to the console
-    printf("%s\n", buffer);
-
-    // Clean up
-    fclose(file);
-    free(buffer);
-    free(preview_path);
-    refresh();
-}
-
-
 void openFile(char *filepath) {
     sigprocmask(SIG_BLOCK, &x, NULL);
     pid_t pid;
@@ -1127,16 +973,20 @@ void openFile(char *filepath) {
     }
 }
 
-void PreviewNextDir(char *next_dir_arg, char **next_directories) {
-    for(int i=0; i<len_preview; i++ ) {
-        if(i == maxy - 1) break;
-        wmove(preview_win,i+1,2);
-        snprintf(temp_dir, sizeof(temp_dir), "%s/%s", next_dir_arg, next_directories[i]);
-        if( isRegularFile(temp_dir) == 0 ){
-            wattron(preview_win, A_BOLD);
-        } else {
-            wattroff(preview_win, A_BOLD);
-        }
-        wprintw(preview_win, "%.*s\n", maxx/2 - 3, next_directories[i]);
-    }
+void WrappeUp(void) {
+	free(cache_path);
+	free(temp_clipboard_path);
+	free(clipboard_path);
+	free(bookmarks_path);
+	free(trash_path);
+	free(editor);
+	free(shell);
+
+	if(last != NULL) {
+		free(last);
+	}
+	//clearImg();
+    ueberzugpp_remove();
+	ueberzugpp_stop();
+	endwin();
 }
