@@ -60,6 +60,16 @@ char *buf;
 char *path;
 FILE *fp;
 
+static int build_path(char *dst, size_t dstsz, const char *base, const char *entry) {
+    /* Avoid "//" when base is root. Returns 0 on success, -1 if truncated/error. */
+    int n;
+    if (base != NULL && base[0] == '/' && base[1] == '\0') {
+        n = snprintf(dst, dstsz, "%s%s", base, entry);
+    } else {
+        n = snprintf(dst, dstsz, "%s/%s", base, entry);
+    }
+    return (n < 0 || (size_t)n >= dstsz) ? -1 : 0;
+}
 
 // Ueberzug++ helpers (declared here because functions.h is included before their definitions)
 void initWindows(void);
@@ -973,6 +983,53 @@ void openFile(char *filepath) {
     }
 }
 
+void help(WINDOW *main_win) {
+    // Help Subwindow
+    int rows = LINES / 2;   // border/margin
+    int cols = COLS / 2;
+    int starty = (LINES - rows) / 2;
+    int startx = (COLS - cols) / 2;
+
+    WINDOW *help_win = newwin(rows, cols, starty, startx);
+    if (!help_win) return;
+
+    box(help_win, 0, 0);
+    mvwprintw(help_win, 0, (cols - 14)/2, " cfl Keybindings ");
+
+    // title or header
+    mvwprintw(help_win, 2, 2, "Key          Action");
+
+    // Hardcoded list for now — later extract from a table/struct
+    int line = 4;
+    mvwprintw(help_win, line++, 2, " h       Parent directory");
+    mvwprintw(help_win, line++, 2, " j       Next item");
+    mvwprintw(help_win, line++, 2, " k       Previous item");
+    mvwprintw(help_win, line++, 2, " l       Open file or Enter dir");
+    mvwprintw(help_win, line++, 2, " v       Select current items");
+    mvwprintw(help_win, line++, 2, " m       Move current items");
+    mvwprintw(help_win, line++, 2, " p       Paste current selected items");
+    mvwprintw(help_win, line++, 2, " d       Delete current selected items");
+    mvwprintw(help_win, line++, 2, " n       Create Folder");
+    mvwprintw(help_win, line++, 2, " r       Rename selected items");
+    mvwprintw(help_win, line++, 2, " +       Add bookmark (It will ask to bind a key to this bookmark)");
+    mvwprintw(help_win, line++, 2, " - + key Remove bookmark");
+    mvwprintw(help_win, line++, 2, " = + key Open bookmark ");
+    mvwprintw(help_win, line++, 2, " ?       Show this help");
+    mvwprintw(help_win, line++, 2, " q       Quit");
+    // Future: use an array of {char key; const char* desc;} and loop
+
+    mvwprintw(help_win, rows-2, 2, "Press any key to close");
+
+    wrefresh(help_win);
+
+    // Wait for any keypress
+    wgetch(help_win);
+
+    delwin(help_win);
+    touchwin(main_win);  // refresh main
+    wrefresh(main_win);
+}
+
 void WrappeUp(void) {
 	free(cache_path);
 	free(temp_clipboard_path);
@@ -981,11 +1038,7 @@ void WrappeUp(void) {
 	free(trash_path);
 	free(editor);
 	free(shell);
-
-	if(last != NULL) {
-		free(last);
-	}
-	//clearImg();
+	free(last);
     ueberzugpp_remove();
 	ueberzugpp_stop();
 	endwin();

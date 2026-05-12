@@ -1,16 +1,5 @@
 #include "functions.h"
 
-static int build_path(char *dst, size_t dstsz, const char *base, const char *entry) {
-    /* Avoid "//" when base is root. Returns 0 on success, -1 if truncated/error. */
-    int n;
-    if (base != NULL && base[0] == '/' && base[1] == '\0') {
-        n = snprintf(dst, dstsz, "%s%s", base, entry);
-    } else {
-        n = snprintf(dst, dstsz, "%s/%s", base, entry);
-    }
-    return (n < 0 || (size_t)n >= dstsz) ? -1 : 0;
-}
-
 int main(int argc, char* argv[]) {
     init(argc, argv);
     cursesInit();
@@ -118,7 +107,6 @@ int main(int argc, char* argv[]) {
             }
         }
 
-
         if(len != 0){
             if(len_preview > -1) {
                 PreviewNextDir(next_dir, next_directories);
@@ -164,6 +152,7 @@ int main(int argc, char* argv[]) {
                 scrollDown();
                 break;
             }
+			case '?': help(stdscr); break;
             case KEY_EMPTYSEL: clearClipboard(); setSelectionCount(); break;
             case KEY_PASTE: copyFiles(dir); break;
             case KEY_MV: moveFiles(dir); selectedFiles = 0; break;

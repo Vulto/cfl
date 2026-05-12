@@ -63,7 +63,7 @@
 #define KEY_BOTTOM 'B'
 
 // Add files to selection list
-#define KEY_SEL 'V'
+#define KEY_SEL 'v'
 
 // View all the selected files
 #define KEY_VIEWSEL '\t' // TAB
@@ -81,7 +81,7 @@
 #define KEY_MV 'm'
 
 // Rename files in selection list
-#define KEY_RENAME 'R'
+#define KEY_RENAME 'r'
 
 // For getting an option to either move the file to trash or delete it
 #define KEY_REMOVEMENU 'd'
@@ -116,6 +116,6 @@
 #define KEY_UPDATE 'u'
 
 // Quit
-#define KEY_ESCAPE 'Q'
+#define KEY_ESCAPE 'q'
 
 #define KEY_DIR 'n'
