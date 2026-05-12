@@ -15,7 +15,6 @@
 #endif
 
 
-// Preview limits (self-contained; no external tools)
 #ifndef MAX_PREVIEW_BYTES
 #define MAX_PREVIEW_BYTES (50 * 1024 * 1024) // 50 MB
 #endif
@@ -30,11 +29,8 @@
 // Set to 1 if you want to see hidden files on startup
 #define SHOW_HIDDEN false
 
-// Set to 0 if you don't want to see number of selected files in the statusbar
+// Set to false if you don't want to see number of selected files in the statusbar
 #define SHOW_SELECTION_COUNT true
-
-// Set to 0 if you don't want to see PDF Previews (previews are broken)
-#define SHOW_PDF_PREVIEWS false
 
 // Program used to open files
 #define FILE_OPENER "nopen"
@@ -66,14 +62,8 @@
 // Go to the bottom of the current view
 #define KEY_BOTTOM 'B'
 
-// Search all files with current directory as base
-#define KEY_SEARCHALL '/'
-
-// Search all files in the current directory
-#define KEY_SEARCHDIR 's'
-
 // Add files to selection list
-#define KEY_SEL 'V'
+#define KEY_SEL 'v'
 
 // View all the selected files
 #define KEY_VIEWSEL '\t' // TAB
@@ -91,7 +81,7 @@
 #define KEY_MV 'm'
 
 // Rename files in selection list
-#define KEY_RENAME 'R'
+#define KEY_RENAME 'r'
 
 // For getting an option to either move the file to trash or delete it
 #define KEY_REMOVEMENU 'd'
@@ -117,9 +107,6 @@
 // Remove Bookmark 
 #define KEY_RMBOOKMARK '-'
 
-// External Scripts Key
-#define KEY_SCRIPT '#'
-
 #define KEY_SHELL '!'
 
 // View preview
@@ -129,6 +116,6 @@
 #define KEY_UPDATE 'u'
 
 // Quit
-#define KEY_ESCAPE 'Q'
+#define KEY_ESCAPE 'q'
 
 #define KEY_DIR 'n'

@@ -21,36 +21,33 @@
 sigset_t x;
 int raised_signal = -1;
 int len = 0;
-int len_preview = 0;
 int len_bookmarks = 0;
 int len_scripts = 0;
 int selectedFiles = 0;
 int i = 0;
 int allocSize;
 char selected_file[NAME_MAX];
-char* dir = NULL;
-char* next_dir = NULL;
-char* prev_dir = NULL;
+
+char dir  [PATH_MAX];
+char next_dir  [PATH_MAX];
+char prev_dir  [PATH_MAX];
+char temp_dir  [PATH_MAX];
+char sort_dir  [PATH_MAX];
+
 char* editor = NULL;
 char* shell = NULL;
-char* temp_dir = NULL;
 char* pch = NULL;
 struct passwd *info;
-char* sort_dir = NULL;
 char* cache_path = NULL;
 char* clipboard_path = NULL;
-char* bookmarks_path = NULL;
-char* scripts_path = NULL;
 char* temp_clipboard_path = NULL;
 char* trash_path = NULL;
 int selection = 0;
 int start = 0;
 int clearFlag = 0;
-int clearFlagImg = 0;
 int searchFlag = 0;
 int backFlag = 0;
 int hiddenFlag = SHOW_HIDDEN;
-int pdfflag = SHOW_PDF_PREVIEWS;
 char* last = NULL;
 WINDOW* current_win;
 WINDOW* preview_win;
@@ -63,6 +60,16 @@ char *buf;
 char *path;
 FILE *fp;
 
+static int build_path(char *dst, size_t dstsz, const char *base, const char *entry) {
+    /* Avoid "//" when base is root. Returns 0 on success, -1 if truncated/error. */
+    int n;
+    if (base != NULL && base[0] == '/' && base[1] == '\0') {
+        n = snprintf(dst, dstsz, "%s%s", base, entry);
+    } else {
+        n = snprintf(dst, dstsz, "%s/%s", base, entry);
+    }
+    return (n < 0 || (size_t)n >= dstsz) ? -1 : 0;
+}
 
 // Ueberzug++ helpers (declared here because functions.h is included before their definitions)
 void initWindows(void);
@@ -73,6 +80,7 @@ int isRegularFile(const char *path);
 
 #include "bookmark.h"
 #include "preview.h"
+
 void cursesInit(void) {
 	initscr();
 	noecho();
@@ -83,6 +91,23 @@ void cursesInit(void) {
 		init_pair(1, COLOR_BLACK, COLOR_WHITE);
 		init_pair(2, COLOR_WHITE, 8);
 	}
+}
+
+void handleResize(void) {
+	endwin();
+	refresh();                    /* ncurses reads new LINES/COLS */
+
+	getmaxyx(stdscr, maxy, maxx);
+	maxy = maxy - 2;
+
+	if (status_win)  delwin(status_win);
+	if (current_win) delwin(current_win);
+	if (preview_win) delwin(preview_win);
+	if (keys_win)    delwin(keys_win);
+
+	status_win = current_win = preview_win = keys_win = NULL;
+
+	initWindows();
 }
 
 int getFiles(char* directory, char*** target) {
@@ -136,31 +161,14 @@ int getFiles(char* directory, char*** target) {
 }
 
 int compare (const void * a, const void * b ) {
-	char *temp_filepath1 = NULL;
-	char *temp_filepath2 = NULL;
+	char temp_filepath1[PATH_MAX];
+	char temp_filepath2[PATH_MAX];
 
-	allocSize = snprintf(NULL,0,"%s/%s", sort_dir, *(char **)a);
-	temp_filepath1 = malloc(allocSize+1);
-	if(temp_filepath1 == NULL) {
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(temp_filepath1,allocSize+1,"%s/%s", sort_dir, *(char **)a);
-	allocSize = snprintf(NULL,0,"%s/%s", sort_dir, *(char **)b);
-	temp_filepath2 = malloc(allocSize+1);
-	if(temp_filepath2 == NULL) {
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(temp_filepath2,allocSize+1,"%s/%s", sort_dir, *(char **)b);
+	snprintf(temp_filepath1, sizeof(temp_filepath1), "%s/%s", sort_dir, *(char **)a);
+	snprintf(temp_filepath2, sizeof(temp_filepath2), "%s/%s", sort_dir, *(char **)b);
 
 	int is_dir1 = (isRegularFile(temp_filepath1) == 0);
 	int is_dir2 = (isRegularFile(temp_filepath2) == 0);
-
-	free(temp_filepath1);
-	free(temp_filepath2);
 
 	if (is_dir1 != is_dir2) {
 		return is_dir2 - is_dir1;
@@ -176,7 +184,9 @@ void handleFlags(char** directories) {
 	}
 
 	if(clearFlagImg == 1){
-		clearImg();
+		//clearImg();
+		ueberzugpp_remove();
+
 		clearFlagImg = 0;
 	}
 
@@ -212,9 +222,12 @@ void handleFlags(char** directories) {
 }
 
 void initWindows(void) {
-	current_win = newwin(maxy, maxx/2+2, 0, 0);
-	preview_win = newwin(maxy, maxx/2-1, 0, maxx/2+1);
-	status_win = newwin(2, maxx, maxy, 0);
+	status_win = newwin(2, maxx, 0, 0);
+
+	starty = 2;
+	current_win = newwin(maxy, maxx/2+2, starty, 0);
+	preview_win = newwin(maxy, maxx/2-1, starty, maxx/2+1);
+
 	keypad(current_win, TRUE);
 	sigprocmask(SIG_UNBLOCK, &x, NULL);
 }
@@ -225,9 +238,9 @@ int isRegularFile(const char *path) {
 	return S_ISREG(st.st_mode);
 }
 
-
 void displayStatus(void) {
-	wmove(status_win,1,0);
+	wclear(status_win);
+	wmove(status_win,0,0);
 	if(SHOW_SELECTION_COUNT == 1) {
 		wprintw(status_win,"[%d] ", selectedFiles);
 	}
@@ -238,6 +251,7 @@ void displayStatus(void) {
 	} else {
 		wprintw(status_win, "/%s", selected_file);
 	}
+	/* line 1 intentionally left blank as a separator */
 	wrefresh(status_win);
 }
 
@@ -363,14 +377,6 @@ void init(int argc, char* argv[]) {
 	}
 	snprintf(bookmarks_path,allocSize+1,"%s/bookmarks",cache_path);
 
-	allocSize = snprintf(NULL,0,"%s/scripts",cache_path);
-	scripts_path = malloc(allocSize+1);
-	if(scripts_path == NULL) {
-		printf("%s\n", "Couldn't initialize scripts path");
-		exit(1);
-	}
-	snprintf(scripts_path,allocSize+1,"%s/scripts",cache_path);
-
 	allocSize = snprintf(NULL,0,"%s/clipboard.tmp",cache_path);
 	temp_clipboard_path = malloc(allocSize+1);
 	if(temp_clipboard_path == NULL) {
@@ -387,63 +393,35 @@ void init(int argc, char* argv[]) {
 	}
 	snprintf(trash_path,allocSize+1,"%s/.local/share/trash",info->pw_dir);
 
-	if (stat(scripts_path, &st) == -1) {
-		mkdir(scripts_path, 0751);
-	}
-
 	char cwd[PATH_MAX];
 	if (getcwd(cwd, sizeof(cwd)) != NULL) {
-		allocSize = snprintf(NULL,0,"%s",cwd);
-		dir = malloc(allocSize+1);
-		if(dir == NULL) {
-			printf("%s\n", "Couldn't initialize dir");
-			exit(1);
-		}
-		snprintf(dir,allocSize+1,"%s",cwd);
+		snprintf(dir, sizeof(dir), "%s", cwd);
 	} else {
-		printf("Couldn't open current directory");
-		exit(1);
+		snprintf(dir, sizeof(dir), "/");
 	}
 
 	if(argc == 2) {
-		if(argv[1][0] == '/') {
-			free(dir);
-			allocSize = snprintf(NULL, 0, "%s", argv[1]);
-			dir = malloc(allocSize+1);
-			if(dir == NULL) {
-				printf("%s\n", "Couldn't initialize dir");
-				exit(1);
+		char arg[PATH_MAX];
+		snprintf(arg, sizeof(arg), "%s", argv[1]);
+		if(arg[0] == '/') {
+			if(strlen(arg) > 1 && arg[strlen(arg)-1] == '/') {
+				arg[strlen(arg)-1] = '\0';
 			}
-			if(strlen(argv[1]) > 1 && argv[1][strlen(argv[1])-1] == '/') {
-				argv[1][strlen(argv[1])-1] = '\0';
-			}
-			snprintf(dir,allocSize+1,"%s", argv[1]);
-		} else { // Relative Path
-			char *temp;
-			int temp_size;
-			temp_size = snprintf(NULL, 0, "%s", argv[1]);
-			allocSize = snprintf(NULL, 0, "%s", dir);
-			temp = malloc(temp_size + allocSize + 2);
-			snprintf(temp, temp_size + allocSize + 2, "%s/%s", dir, argv[1]);
-			free(dir);
-			dir = malloc(temp_size + allocSize + 2);
-			if(dir == NULL) {
-				printf("%s\n", "Couldn't initialize dir");
-				exit(1);
-			}
-			snprintf(dir, temp_size + allocSize + 2, "%s", temp);
-			free(temp);
+			snprintf(dir, sizeof(dir), "%s", arg);
+		} else {
+			char temp[PATH_MAX];
+			snprintf(temp, sizeof(temp), "%s/%s", dir, arg);
+			snprintf(dir, sizeof(dir), "%s", temp);
 		}
-	} else if(argc > 2) { // Excess arguments given
+	} else if(argc > 2) {
 		printf("Incorrect Usage!\n");
 		exit(1);
 	}
-
 	if( SHOW_SELECTION_COUNT == 1 ) {
 		setSelectionCount();
 	}
 }
-// Checks if a file exists
+
 int fileExists(char *file) {
 	if( access ( file, F_OK ) != -1 ) {
 		return EXIT_FAILURE;
@@ -522,7 +500,7 @@ void removeClipboard(char *filepath) {
 	if (f2 == NULL) {
 		endwin();
 		printf("Couldn't Create Temporary Clipboard File!\n");
-		fclose(f1); // Make sure to close the opened file before exiting
+		fclose(f1); 
 		exit(1);
 	}
 
@@ -535,7 +513,6 @@ void removeClipboard(char *filepath) {
 	fclose(f1);
 	fclose(f2);
 
-	// Rename the temporary file to overwrite the original clipboard file
 	if (rename(temp_clipboard_path, clipboard_path) != 0) {
 		endwin();
 		perror("Couldn't move temporary clipboard file");
@@ -543,7 +520,6 @@ void removeClipboard(char *filepath) {
 	}
 }
 
-// Empties the clipboard file and resets selection count
 void clearClipboard(void) {
     FILE *f = fopen(clipboard_path, "w");
     if (f == NULL) {
@@ -554,8 +530,6 @@ void clearClipboard(void) {
     fclose(f);
     selectedFiles = 0;
 }
-
-
 
 void getParentPath(char *path) {
 	char *p;
@@ -643,15 +617,7 @@ void removeFiles(void){
 
 void renameFiles(char **directories){
 	if( access( clipboard_path, F_OK ) == -1 ){
-		free(temp_dir);
-		allocSize = snprintf(NULL,0,"%s/%s",dir,directories[selection]);
-		temp_dir = malloc(allocSize+1);
-		if(temp_dir == NULL){
-			endwin();
-			fprintf(stderr, "%s\n", "Couldn't allocate memory!");
-			exit(1);
-		}
-		snprintf(temp_dir,allocSize+1,"%s/%s",dir,directories[selection]);
+		snprintf(temp_dir, sizeof(temp_dir), "%s/%s", dir, directories[selection]);
 		char *temp = strdup(temp_dir);
 		if(temp == NULL){
 			endwin();
@@ -816,15 +782,7 @@ void prevPage(void) {
 
 void goForward(void) {
 	if(len_preview != -1){
-		free(dir);
-		allocSize = snprintf(NULL,0,"%s",next_dir);
-		dir = malloc(allocSize+1);
-		if(dir == NULL){
-			endwin();
-			printf("%s\n", "Couldn't allocate memory!");
-			exit(1);
-		}
-		snprintf(dir,allocSize+1,"%s",next_dir);
+		snprintf(dir, sizeof(dir), "%s", next_dir);
 		selection = 0;
 		start = 0;
 	} else {
@@ -834,25 +792,8 @@ void goForward(void) {
 }
 
 void goBack(void) {
-	free(temp_dir);
-	allocSize = snprintf(NULL,0,"%s",dir);
-	temp_dir = malloc(allocSize+1);
-	if(temp_dir == NULL){
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(temp_dir,allocSize+1,"%s",dir);
-
-	free(dir);
-	allocSize = snprintf(NULL,0,"%s",prev_dir);
-	dir = malloc(allocSize+1);
-	if(dir == NULL) {
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(dir,allocSize+1,"%s",prev_dir);
+	snprintf(temp_dir, sizeof(temp_dir), "%s", dir);
+	snprintf(dir, sizeof(dir), "%s", prev_dir);
 
 	selection = 0;
 	start = 0;
@@ -910,237 +851,6 @@ void getLastToken(char *tokenizer) {
 	}
 }
 
-void getScripts(char** directories) {
-	int pid;
-	char **scripts = NULL;
-	len_scripts = getFiles(scripts_path, &scripts);
-	if(len_scripts <= 0) {
-		displayAlert("No scripts found!");
-		if (scripts) free(scripts);
-		return;
-	}
-
-	clearImg();
-	keys_win = newwin(len_scripts+1, maxx, maxy-len_scripts, 0);
-	wprintw(keys_win,"%s\t%s\n", "S.No.", "Name");
-	for(i=0; i<len_scripts; i++){
-		wprintw(keys_win, "%d\t%s\n", i+1, scripts[i]);
-	}
-	secondKey = wgetch(keys_win);
-	int option = secondKey - '0';
-	option--;
-	if(option < len_scripts && option >= 0) {
-		free(temp_dir);
-		allocSize = snprintf(NULL, 0, "%s/%s", scripts_path, scripts[option]);
-		temp_dir = malloc(allocSize+1);
-		if(temp_dir == NULL) {
-			displayAlert("Couldn't allocate memory!");
-			exit(1);
-		}
-		snprintf(temp_dir, allocSize+1, "%s/%s", scripts_path, scripts[option]);
-
-		allocSize = snprintf(NULL, 0, "%s/%s", dir, directories[selection]);
-		buf = malloc(allocSize+1);
-		if(buf == NULL) {
-			displayAlert("Couldn't allocate memory!");
-			exit(1);
-		}
-		snprintf(buf, allocSize+1, "%s/%s", dir, directories[selection]);
-
-		endwin();
-		pid = fork();
-		if( pid == 0 ) {
-			chdir(dir);
-			execl(temp_dir, scripts[option], buf, (char *)0);
-			exit(1);
-		} else {
-			int status;
-			waitpid(pid, &status, 0);
-		}
-
-		free(buf);
-		refresh();
-	}
-	for(i=0; i<len_scripts; i++) {
-		free(scripts[i]);
-	}
-	free(scripts);
-}
-
-void searchAll(FILE *fp, char *path, pid_t pid, int fd) {
-	clearImg();
-
-	free(temp_dir);
-	allocSize = snprintf(NULL,0,"%s/preview",cache_path);
-	temp_dir = malloc(allocSize+1);
-	if(temp_dir == NULL){
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(temp_dir,allocSize+1,"%s/preview",cache_path);
-
-	remove(temp_dir);
-
-	endwin();
-	pid = fork();
-	if( pid == 0 ){
-		fd = open(temp_dir, O_CREAT | O_WRONLY, 0755);
-		dup2(fd, 1);
-		chdir(dir);
-		execlp("fzf","fzf",(char *)0);
-		exit(1);
-	} else {
-		int status;
-		waitpid(pid,&status,0);
-	}
-
-	buf = malloc(PATH_MAX);
-	if(buf == NULL) {
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	memset(buf, '\0', PATH_MAX);
-	fp = fopen(temp_dir, "r");
-	while(fgets(buf,PATH_MAX,fp) != NULL){}
-	fclose(fp);
-
-	allocSize = snprintf(NULL, 0, "%s/%s",dir,buf);
-	path = malloc(allocSize+1);
-	if(path == NULL) {
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(path, allocSize+1, "%s/%s",dir,buf);
-
-	free(temp_dir);
-	allocSize = snprintf(NULL,0,"%s", path);
-	temp_dir = malloc(allocSize+1);
-	if(temp_dir == NULL){
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(temp_dir,allocSize+1,"%s",path);
-	getLastToken("/");
-	getParentPath(path);
-	free(dir);
-	allocSize = snprintf(NULL,0,"%s", path);
-	dir = malloc(allocSize+1);
-	if(dir == NULL) {
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(dir,allocSize+1,"%s", path);
-
-	selection = 0;
-	start = 0;
-	clearFlag = 1;
-	searchFlag = 1;
-
-	free(buf);
-	free(path);
-}
-
-
-void searchHere(int *pfd, char *path, pid_t pid, int fd){
-	clearImg();
-
-	free(temp_dir);
-	allocSize = snprintf(NULL,0,"%s/preview",cache_path);
-	temp_dir = malloc(allocSize+1);
-	if(temp_dir == NULL){
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(temp_dir,allocSize+1,"%s/preview",cache_path);
-
-	remove(temp_dir);
-
-	pipe(pfd);
-	pid = fork();
-	if(pid == 0) {
-		dup2(pfd[1], 1);
-		close(pfd[1]);
-		chdir(dir);
-		if( hiddenFlag == 1 )
-			execlp("ls","ls","-a",(char *)0);
-		else
-			execlp("ls","ls",(char *)0);
-		exit(1);
-	} else {
-		int status;
-		waitpid(pid,&status,0);
-		close(pfd[1]);
-		pid = fork();
-		if(pid == 0){
-			fd = open(temp_dir, O_CREAT | O_WRONLY, 0755);
-			dup2(pfd[0],0);
-			dup2(fd, 1);
-			close(pfd[0]);
-			execlp("fzf","fzf",(char *)0);
-			exit(1);
-		} else {
-			waitpid(pid, &status, 0);
-			close(pfd[0]);
-		}
-	}
-
-	buf = malloc(PATH_MAX);
-	if(buf == NULL) {
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	memset(buf, '\0', PATH_MAX);
-	fp = fopen(temp_dir, "r");
-	while(fgets(buf,PATH_MAX,fp) != NULL){}
-	fclose(fp);
-
-	allocSize = snprintf(NULL,0,"%s/%s",dir,buf);
-	path = malloc(allocSize+1);
-	if(path == NULL){
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(path,allocSize+1,"%s/%s",dir,buf);
-
-	free(temp_dir);
-	allocSize = snprintf(NULL,0,"%s",path);
-	temp_dir = malloc(allocSize+1);
-	if(temp_dir == NULL){
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(temp_dir,allocSize+1,"%s",path);
-	getLastToken("/");
-	getParentPath(path);
-
-	free(dir);
-	allocSize = snprintf(NULL,0,"%s",path);
-	dir = malloc(allocSize+1);
-	if(dir == NULL){
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(EXIT_FAILURE);
-	}
-	snprintf(dir,allocSize+1,"%s",path);
-
-	free(buf);
-	free(path);
-
-	selection = 0;
-	start = 0;
-	clearFlag = 1;
-	searchFlag = 1;
-}
-
 void goShell(pid_t pid) {
 	pid = fork();
 	if( pid == 0 ) {
@@ -1158,7 +868,7 @@ void goShell(pid_t pid) {
 
 void Deleting(void) {
 	if( fileExists(clipboard_path) == 1 ) {
-		keys_win = newwin(3, maxx, maxy-3, 0);
+		keys_win = newwin(3, maxx, starty + maxy - 3, 0);
 		wprintw(keys_win,"Key\tCommand");
 		wprintw(keys_win,"\n%c\tMove to Garbage Can", KEY_GARBAGE);
 		wprintw(keys_win,"\n%c\tDelete", KEY_DELETE);
@@ -1188,7 +898,6 @@ void Deleting(void) {
 		displayAlert("Select some files first!");
 	}
 }
-
 
 void ViewSel(pid_t pid) {
 	if( access( clipboard_path, F_OK ) != -1 ) {
@@ -1227,26 +936,6 @@ void EditSel(pid_t pid) {
 	}
 }
 
-void WrappeUp(void) {
-	free(cache_path);
-	free(temp_clipboard_path);
-	free(clipboard_path);
-	free(bookmarks_path);
-	free(scripts_path);
-	free(trash_path);
-	free(editor);
-	free(shell);
-	free(dir);
-	free(temp_dir);
-
-	if(last != NULL) {
-		free(last);
-	}
-	clearImg();
-	ueberzugpp_stop();
-	endwin();
-}
-
 void CreateDir() {
 	int height = 3, width = 50;
 	int startY = (LINES - height) / 2;
@@ -1277,74 +966,6 @@ void CreateDir() {
 	}
 }
 
-void viewPreview(void) {
-    FILE *file;
-    char *preview_path = NULL;
-    int allocSize;
-    size_t file_size;
-    char *buffer;
-    
-    // Calculate the size of the path string and allocate memory
-    allocSize = snprintf(NULL, 0, "%s/preview", cache_path);
-    if (allocSize < 0) {
-        endwin();
-        printf("Error calculating allocation size!\n");
-        exit(EXIT_FAILURE);
-    }
-
-    preview_path = (char *)malloc(allocSize + 1);
-    if (preview_path == NULL) {
-        endwin();
-        printf("Couldn't allocate memory!\n");
-        exit(EXIT_FAILURE);
-    }
-
-    if (snprintf(preview_path, allocSize + 1, "%s/preview", cache_path) < 0) {
-        endwin();
-        free(preview_path);
-        printf("Error formatting preview path!\n");
-        exit(EXIT_FAILURE);
-    }
-
-    endwin();
-
-    // Open the file for reading
-    file = fopen(preview_path, "r");
-    if (file == NULL) {
-        printf("Error opening preview file: %s\n", preview_path);
-        free(preview_path);
-        exit(EXIT_FAILURE);
-    }
-
-    // Determine the file size
-    fseek(file, 0, SEEK_END);
-    file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-
-    // Allocate buffer to hold the entire file contents
-    buffer = (char *)malloc(file_size + 1);
-    if (buffer == NULL) {
-        printf("Error allocating buffer memory\n");
-        fclose(file);
-        free(preview_path);
-        exit(EXIT_FAILURE);
-    }
-
-    // Read the file into the buffer
-    fread(buffer, 1, file_size, file);
-    buffer[file_size] = '\0'; // Null-terminate the string
-
-    // Print the contents to the console
-    printf("%s\n", buffer);
-
-    // Clean up
-    fclose(file);
-    free(buffer);
-    free(preview_path);
-    refresh();
-}
-
-
 void openFile(char *filepath) {
     sigprocmask(SIG_BLOCK, &x, NULL);
     pid_t pid;
@@ -1362,25 +983,63 @@ void openFile(char *filepath) {
     }
 }
 
-void PreviewNextDir(char *next_dir, char **next_directories) {
-    for(int i=0; i<len_preview; i++ ) {
-        if(i == maxy - 1)
-            break;
-        wmove(preview_win,i+1,2);
-        free(temp_dir);
-        allocSize = snprintf(NULL,0,"%s/%s", next_dir, next_directories[i]);
-        temp_dir = malloc(allocSize+1);
-        if(temp_dir == NULL) {
-            endwin();
-            printf("%s\n", "Couldn't allocate memory!");
-            exit(1);
-        }
-        snprintf(temp_dir, allocSize+1, "%s/%s", next_dir, next_directories[i]);
-        if( isRegularFile(temp_dir) == 0 ){
-            wattron(preview_win, A_BOLD);
-        } else {
-            wattroff(preview_win, A_BOLD);
-        }
-        wprintw(preview_win, "%.*s\n", maxx/2 - 3, next_directories[i]);
-    }
+void help(WINDOW *main_win) {
+    // Help Subwindow
+    int rows = LINES / 2;   // border/margin
+    int cols = COLS / 2;
+    int starty = (LINES - rows) / 2;
+    int startx = (COLS - cols) / 2;
+
+    WINDOW *help_win = newwin(rows, cols, starty, startx);
+    if (!help_win) return;
+
+    box(help_win, 0, 0);
+    mvwprintw(help_win, 0, (cols - 14)/2, " cfl Keybindings ");
+
+    // title or header
+    mvwprintw(help_win, 2, 2, "Key          Action");
+
+    // Hardcoded list for now — later extract from a table/struct
+    int line = 4;
+    mvwprintw(help_win, line++, 2, " h       Parent directory");
+    mvwprintw(help_win, line++, 2, " j       Next item");
+    mvwprintw(help_win, line++, 2, " k       Previous item");
+    mvwprintw(help_win, line++, 2, " l       Open file or Enter dir");
+    mvwprintw(help_win, line++, 2, " v       Select current items");
+    mvwprintw(help_win, line++, 2, " m       Move current items");
+    mvwprintw(help_win, line++, 2, " p       Paste current selected items");
+    mvwprintw(help_win, line++, 2, " d       Delete current selected items");
+    mvwprintw(help_win, line++, 2, " n       Create Folder");
+    mvwprintw(help_win, line++, 2, " r       Rename selected items");
+    mvwprintw(help_win, line++, 2, " +       Add bookmark (It will ask to bind a key to this bookmark)");
+    mvwprintw(help_win, line++, 2, " - + key Remove bookmark");
+    mvwprintw(help_win, line++, 2, " = + key Open bookmark ");
+    mvwprintw(help_win, line++, 2, " ?       Show this help");
+    mvwprintw(help_win, line++, 2, " q       Quit");
+    // Future: use an array of {char key; const char* desc;} and loop
+
+    mvwprintw(help_win, rows-2, 2, "Press any key to close");
+
+    wrefresh(help_win);
+
+    // Wait for any keypress
+    wgetch(help_win);
+
+    delwin(help_win);
+    touchwin(main_win);  // refresh main
+    wrefresh(main_win);
+}
+
+void WrappeUp(void) {
+	free(cache_path);
+	free(temp_clipboard_path);
+	free(clipboard_path);
+	free(bookmarks_path);
+	free(trash_path);
+	free(editor);
+	free(shell);
+	free(last);
+    ueberzugpp_remove();
+	ueberzugpp_stop();
+	endwin();
 }
