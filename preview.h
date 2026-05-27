@@ -9,6 +9,13 @@ static FILE *ueberzug_in = NULL;
 static int ueberzug_failed = 0;
 int clearFlagImg = 0;
 
+extern int preview_scroll;       /* shared with functions.h */
+extern long preview_total_lines; /* shared with functions.h for text/hex totals */
+
+/* Caching for preview target + totals (text line count or hex rows) */
+static char preview_target_path[PATH_MAX] = "";
+/* preview_total_lines is defined in functions.h and externed above */
+
 static void ueberzugpp_start_once(void) {
     if (ueberzug_in != NULL || ueberzug_failed) return;
 
@@ -126,48 +133,103 @@ static int getMIME(const char *filepath, char mime[128]) {
     return 0;
 }
 
+/* Fast line counter (called only on preview target change for perf) */
+static long count_text_lines(const char *path) {
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 0;
+    long n = 0;
+    char buf[8192];
+    while (fgets(buf, sizeof(buf), fp)) n++;
+    fclose(fp);
+    return n;
+}
+
 static void render_text_preview(const char *path, int maxx) {
+    long total = preview_total_lines;
+    if (total < 0) total = 0;
+
+    int rows, cols;
+    getmaxyx(preview_win, rows, cols);
+    (void)cols;
+    int visible = rows > 0 ? rows : 1;
+
+    /* Enforce last-line stop: max scroll so last line sits at bottom */
+    long max_scroll = (total > visible) ? (total - visible) : 0;
+    if (preview_scroll < 0) preview_scroll = 0;
+    if (preview_scroll > max_scroll) preview_scroll = (int)max_scroll;
+
     FILE *fp = fopen(path, "r");
     if (!fp) {
         preview_print_message("Preview unavailable: can't open file", maxx);
+        drawScrollbar(preview_win, (int)total, preview_scroll, true);
+        wrefresh(preview_win);
         return;
     }
 
     char line[4096];
-    int rows, cols;
-    getmaxyx(preview_win, rows, cols);
-    (void)cols;
-    int max_lines = TEXT_PREVIEW_LINES;
-    int avail_lines = rows - 2;
+    int avail_lines = visible;
     if (avail_lines < 1) avail_lines = 1;
-    if (max_lines > avail_lines) max_lines = avail_lines;
-    int y = 1;
+
+    /* Skip scrolled lines */
+    long skip = preview_scroll;
+    for (long i = 0; i < skip; i++) {
+        if (!fgets(line, sizeof(line), fp)) break;
+    }
+
     wclear(preview_win);
-    for (int i = 0; i < max_lines && fgets(line, sizeof line, fp); ++i) {
+    int y = 1;
+    for (int i = 0; i < avail_lines && fgets(line, sizeof(line), fp); ++i) {
         wmove(preview_win, y++, 2);
         wprintw(preview_win, "%.*s", maxx - 4, line);
     }
     fclose(fp);
+
+    drawScrollbar(preview_win, (int)total, preview_scroll, true);
     wrefresh(preview_win);
 }
 
 static void render_hex_preview(const char *path, int maxx) {
-    FILE *fp = fopen(path, "rb");
-    if (!fp) {
-        preview_print_message("Preview unavailable: can't open file", maxx);
-        return;
-    }
+    long total = preview_total_lines;
+    if (total < 0) total = 0;
 
     int rows, cols;
     getmaxyx(preview_win, rows, cols);
-    int avail_lines = rows - 2;
+    (void)cols;
+    int visible = rows > 0 ? rows : 1;
+
+    long max_scroll = (total > visible) ? (total - visible) : 0;
+    if (preview_scroll < 0) preview_scroll = 0;
+    if (preview_scroll > max_scroll) preview_scroll = (int)max_scroll;
+
+    FILE *fp = fopen(path, "rb");
+    if (!fp) {
+        preview_print_message("Preview unavailable: can't open file", maxx);
+        drawScrollbar(preview_win, (int)total, preview_scroll, true);
+        wrefresh(preview_win);
+        return;
+    }
+
+    int avail_lines = visible;
     if (avail_lines < 1) avail_lines = 1;
+
     size_t bytes_per_line = 16;
+    size_t start_offset = (size_t)preview_scroll * bytes_per_line;
+
+    if (fseek(fp, (long)start_offset, SEEK_SET) != 0) {
+        fclose(fp);
+        preview_print_message("Preview unavailable: seek error", maxx);
+        drawScrollbar(preview_win, (int)total, preview_scroll, true);
+        wrefresh(preview_win);
+        return;
+    }
+
     size_t max_bytes = (size_t)avail_lines * bytes_per_line;
     unsigned char *buf = (unsigned char *)malloc(max_bytes);
     if (!buf) {
         fclose(fp);
         preview_print_message("Preview unavailable: out of memory", maxx);
+        drawScrollbar(preview_win, (int)total, preview_scroll, true);
+        wrefresh(preview_win);
         return;
     }
 
@@ -175,16 +237,17 @@ static void render_hex_preview(const char *path, int maxx) {
     fclose(fp);
 
     wclear(preview_win);
-    size_t offset = 0;
+
+    size_t offset = start_offset;
     int y = 1;
-    while (offset < n && y <= avail_lines) {
+    while (offset < start_offset + n && y <= avail_lines) {
         char ascii[17];
         ascii[16] = '\0';
         wmove(preview_win, y, 2);
         wprintw(preview_win, "%08zx  ", offset);
         for (size_t i = 0; i < bytes_per_line; i++) {
-            if (offset + i < n) {
-                unsigned char c = buf[offset + i];
+            if (offset + i < start_offset + n) {
+                unsigned char c = buf[(offset + i) - start_offset];
                 wprintw(preview_win, "%02x ", (unsigned)c);
                 ascii[i] = (c >= 32 && c <= 126) ? c : '.';
             } else {
@@ -199,6 +262,7 @@ static void render_hex_preview(const char *path, int maxx) {
     }
 
     free(buf);
+    drawScrollbar(preview_win, (int)total, preview_scroll, true);
     wrefresh(preview_win);
 }
 
@@ -229,6 +293,24 @@ static void getPreview(char *filepath, int maxy, int maxx) {
     }
 
     ueberzugpp_remove();
+
+    /* Cache total for text/hex scrollbar (only on target change) */
+    if (strcmp(preview_target_path, filepath) != 0) {
+        strncpy(preview_target_path, filepath, sizeof(preview_target_path)-1);
+        preview_target_path[sizeof(preview_target_path)-1] = '\0';
+
+        if (strncmp(mime, "text/", 5) == 0 ||
+            strstr(mime, "json") != NULL ||
+            strstr(mime, "xml") != NULL ||
+            strstr(mime, "javascript") != NULL ||
+            strstr(mime, "x-shellscript") != NULL) {
+            preview_total_lines = count_text_lines(filepath);
+        } else {
+            size_t bpl = 16;
+            preview_total_lines = (st.st_size + bpl - 1) / bpl;
+        }
+    }
+
     if (strncmp(mime, "text/", 5) == 0 ||
         strstr(mime, "json") != NULL ||
         strstr(mime, "xml") != NULL ||
@@ -241,16 +323,27 @@ static void getPreview(char *filepath, int maxy, int maxx) {
 }
 
 void PreviewNextDir(char *next_dir_arg, char **next_directories) {
-    for(int i=0; i<len_preview; i++ ) {
-        if(i == maxy - 1) break;
-        wmove(preview_win,i+1,2);
+    int rows, cols;
+    getmaxyx(preview_win, rows, cols);
+    int visible = rows > 0 ? rows : 1;
+
+    if (preview_scroll < 0) preview_scroll = 0;
+    if (preview_scroll > len_preview) preview_scroll = len_preview;
+
+    int start = preview_scroll;
+    for (int i = start; i < len_preview && (i - start) < visible; i++) {
+        int y = i - start + 1;
+        wmove(preview_win, y, 2);
         snprintf(temp_dir, sizeof(temp_dir), "%s/%s", next_dir_arg, next_directories[i]);
-        if( isRegularFile(temp_dir) == 0 ){
+        if (isRegularFile(temp_dir) == 0) {
             wattron(preview_win, A_BOLD);
         } else {
             wattroff(preview_win, A_BOLD);
         }
         wprintw(preview_win, "%.*s\n", maxx/2 - 3, next_directories[i]);
     }
+
+    /* Left scrollbar for preview directory listing */
+    drawScrollbar(preview_win, len_preview, start, true);
 }
 #endif

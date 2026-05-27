@@ -63,12 +63,20 @@ int main(int argc, char* argv[]) {
 
             wmove( current_win,t,2 );
 
+            /* Reserve space for right-edge scrollbar inside current_win */
+            int dummy, list_w;
+            getmaxyx(current_win, dummy, list_w);
+            int trunc = list_w - 5;  /* left pad (2) + right bar reservation + safety */
+
             if( checkClipboard( temp_dir ) == 0 ) {
-                wprintw( current_win, "%.*s\n", maxx/2, directories[i] );
+                wprintw( current_win, "%.*s\n", trunc, directories[i] );
             } else {
-                wprintw( current_win, "* %.*s\n", maxx/2-3, directories[i] );
+                wprintw( current_win, "* %.*s\n", (trunc > 3 ? trunc-3 : trunc), directories[i] );
             }
         }
+
+        /* Hygiene: reset attrs so scrollbar (drawn later) doesn't inherit bold/reverse */
+        wattrset(current_win, A_NORMAL);
 
         if( selection == -1 ) {
             selection = 0;
@@ -115,12 +123,18 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        /* Draw file list scrollbar (right) + separator. Preview bar is drawn inside its own renderers. */
+        drawFileListScrollbar();
+        drawPanelSeparator();
         refreshWindows();
         pid_t pid = 0;
 
         switch( ch = wgetch(current_win) ) {
             case KEY_RESIZE:
                 handleResize();
+                break;
+            case KEY_MOUSE:
+                handleMouse();
                 break;
             case KEY_NAVUP: scrollUp(); break;
             case KEY_NAVDOWN: scrollDown(); break;
@@ -129,6 +143,11 @@ int main(int argc, char* argv[]) {
             case KEY_NAVBACK: goBack(); break;
             case KEY_NPAGE: nextPage(); break;
             case KEY_PPAGE: prevPage(); break;
+            /* Preview pane scrolling (text, hex, directory listings) */
+            case '[': previewPageUp(); break;
+            case ']': previewPageDown(); break;
+            case 'J': previewScrollDown(); break;
+            case 'K': previewScrollUp(); break;
             case KEY_START: goSTART(); break;
             case KEY_GOEND: goEND(); break;
             case KEY_TOP: selection = start; break;

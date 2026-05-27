@@ -54,6 +54,9 @@ WINDOW* preview_win;
 WINDOW* status_win;
 WINDOW* keys_win;
 int startx, starty, maxx, maxy;
+int preview_start;     /* column for preview pane start / right scrollbar position */
+int preview_scroll = 0; /* current scroll offset for preview pane (dir listings + text/hex) */
+long preview_total_lines = 0; /* cached total for current text/hex preview (lines or hex-rows) */
 bool Running = true;
 char secondKey;
 char *buf;
@@ -78,6 +81,11 @@ void getLastToken(char *tokenizer);
 void displayAlert(char *message);
 int isRegularFile(const char *path);
 
+// Scrollbar helper (reusable for file list right + preview left). Implemented later in this file.
+void drawScrollbar(WINDOW *win, int total, int first_visible, bool on_left);
+void drawFileListScrollbar(void);
+void drawPanelSeparator(void);
+
 #include "bookmark.h"
 #include "preview.h"
 
@@ -85,12 +93,18 @@ void cursesInit(void) {
 	initscr();
 	noecho();
 	curs_set(0);
+	keypad(stdscr, TRUE);
+
 	if (has_colors()) {
 		start_color();
 		use_default_colors();
 		init_pair(1, COLOR_BLACK, COLOR_WHITE);
 		init_pair(2, COLOR_WHITE, 8);
 	}
+
+	/* Mouse for scrollbar interaction (wheel, click, drag on both bars) */
+	mousemask(BUTTON1_PRESSED | BUTTON1_RELEASED | BUTTON4_PRESSED | BUTTON5_PRESSED | REPORT_MOUSE_POSITION, NULL);
+	mouseinterval(0);
 }
 
 void handleResize(void) {
@@ -222,11 +236,19 @@ void handleFlags(char** directories) {
 }
 
 void initWindows(void) {
+	/* Basic status bar */
 	status_win = newwin(2, maxx, 0, 0);
 
 	starty = 2;
-	current_win = newwin(maxy, maxx/2+2, starty, 0);
-	preview_win = newwin(maxy, maxx/2-1, starty, maxx/2+1);
+
+	/* Dynamic split for nice scrollbar + separator placement (right side of list, left side of preview) */
+	preview_start = (maxx * 2) / 5 + 2;   /* left panel ~40% + padding for bar */
+
+	int left_w  = preview_start;                 /* includes space for right scrollbar column */
+	int right_w = maxx - preview_start - 1;
+
+	current_win = newwin(maxy, left_w,  starty, 0);
+	preview_win = newwin(maxy, right_w, starty, preview_start + 1);
 
 	keypad(current_win, TRUE);
 	sigprocmask(SIG_UNBLOCK, &x, NULL);
@@ -740,6 +762,258 @@ void refreshWindows(void) {
 	wrefresh(preview_win);
 }
 
+/* Thin vertical separator between file list and preview (drawn on stdscr for reliability).
+ * Positioned at preview_start using A_DIM + ACS_VLINE to match scrollbar style.
+ */
+void drawPanelSeparator(void) {
+	if (preview_start < 1 || preview_start >= maxx - 1) return;
+
+	int sep_height = maxy;  /* roughly matches panel height */
+	if (sep_height > 0) {
+		wattrset(stdscr, A_DIM);
+		mvwvline(stdscr, starty, preview_start, ACS_VLINE, sep_height);
+		wnoutrefresh(stdscr);
+	}
+}
+
+/* Reusable thin proportional thumb-only scrollbar.
+ * Drawn inside the given window on left (col 0) or right (last col) edge.
+ * Matches the final polished design: ACS_VLINE + A_DIM, FP math, hide when fits,
+ * explicit column clear first (no rail/track).
+ */
+void drawScrollbar(WINDOW *win, int total, int first_visible, bool on_left) {
+	if (!win || total <= 0) return;
+
+	int win_rows, win_cols;
+	getmaxyx(win, win_rows, win_cols);
+	if (win_rows <= 1 || win_cols <= 2) return;
+
+	int bar_col = on_left ? 0 : (win_cols - 1);
+
+	if (total <= win_rows) {
+		/* Content fits: hide cleanly by clearing the column */
+		wattrset(win, A_NORMAL);
+		for (int r = 0; r < win_rows; r++) {
+			mvwaddch(win, r, bar_col, ' ');
+		}
+		return;
+	}
+
+	/* Proportional thumb (only) using floating point for smoothness */
+	double vis_f = (double)win_rows;
+	double scrollable = (double)total - vis_f;
+
+	int thumb_h = (int)((vis_f / (double)total) * vis_f + 0.5);
+	if (thumb_h < 1) thumb_h = 1;
+	if (thumb_h > win_rows) thumb_h = win_rows;
+
+	double pos = 0.0;
+	if (scrollable > 0.0) {
+		pos = (double)first_visible / scrollable * (vis_f - thumb_h);
+	}
+	int thumb_start = (int)(pos + 0.5);
+	if (thumb_start < 0) thumb_start = 0;
+	if (thumb_start + thumb_h > win_rows) thumb_start = win_rows - thumb_h;
+
+	/* Clear then draw only the thumb segment */
+	wattrset(win, A_NORMAL);
+	for (int r = 0; r < win_rows; r++) {
+		mvwaddch(win, r, bar_col, ' ');
+	}
+
+	wattrset(win, A_DIM);
+	for (int r = 0; r < thumb_h; r++) {
+		mvwaddch(win, thumb_start + r, bar_col, ACS_VLINE);
+	}
+	wattrset(win, A_NORMAL);
+}
+
+/* Convenience wrapper for the file list (always right edge, using global len/start) */
+void drawFileListScrollbar(void) {
+	if (current_win) {
+		drawScrollbar(current_win, len, start, false);  /* false = right side */
+	}
+}
+
+/* Small helper for preview visible height (used by clamping) */
+static inline int get_preview_visible_rows(void) {
+	if (!preview_win) return 20;
+	int r, c;
+	getmaxyx(preview_win, r, c);
+	return (r > 0) ? r : 1;
+}
+
+/* Preview scrolling helpers with proper last-line clamping (total - visible) */
+void previewScrollUp(void) {
+	if (preview_scroll > 0) {
+		preview_scroll--;
+	}
+}
+
+void previewScrollDown(void) {
+	int visible = get_preview_visible_rows();
+	long total = (len_preview > 0) ? len_preview : preview_total_lines;
+
+	if (total > 0) {
+		long max_start = total - visible;
+		if (max_start < 0) max_start = 0;
+
+		preview_scroll++;
+		if (preview_scroll > max_start) {
+			preview_scroll = (int)max_start;
+		}
+	} else {
+		preview_scroll++;
+	}
+}
+
+void previewPageUp(void) {
+	preview_scroll -= 10;
+	if (preview_scroll < 0) preview_scroll = 0;
+}
+
+void previewPageDown(void) {
+	int visible = get_preview_visible_rows();
+	long total = (len_preview > 0) ? len_preview : preview_total_lines;
+
+	if (total > 0) {
+		long max_start = total - visible;
+		if (max_start < 0) max_start = 0;
+
+		preview_scroll += visible;
+		if (preview_scroll > max_start) {
+			preview_scroll = (int)max_start;
+		}
+	} else {
+		preview_scroll += 10;
+	}
+}
+
+/* Full mouse handler for both scrollbars + wheel.
+ * Hit tests using actual window geometry so it survives layout changes.
+ * Wheel routes by X position relative to preview_start.
+ */
+void handleMouse(void) {
+	static bool dragging_file = false;
+	static bool dragging_preview = false;
+
+	MEVENT ev;
+	if (getmouse(&ev) != OK) return;
+	if (!current_win || !preview_win) return;
+
+	int mx = ev.x;
+	int my = ev.y;
+
+	int file_begy, file_begx, file_rows, file_cols;
+	getbegyx(current_win, file_begy, file_begx);
+	getmaxyx(current_win, file_rows, file_cols);
+
+	int prev_begy, prev_begx, prev_rows, prev_cols;
+	getbegyx(preview_win, prev_begy, prev_begx);
+	getmaxyx(preview_win, prev_rows, prev_cols);
+	(void)prev_begy;
+
+	int file_sb_col    = file_begx + file_cols - 1; /* right edge of left panel */
+	int preview_sb_col = prev_begx;                  /* left edge of right panel */
+
+	int panel_top    = file_begy;
+	int panel_height = file_rows;
+
+	if (my < panel_top || my >= panel_top + panel_height) return;
+
+	/* Wheel */
+	if (ev.bstate & BUTTON4_PRESSED) { /* up */
+		int lines = 5;
+		if (mx <= file_sb_col + 2) {
+			start -= lines; if (start < 0) start = 0;
+			wclear(current_win);
+		} else {
+			preview_scroll -= lines; if (preview_scroll < 0) preview_scroll = 0;
+			wclear(preview_win);
+		}
+		return;
+	}
+	if (ev.bstate & BUTTON5_PRESSED) { /* down */
+		int lines = 5;
+		if (mx <= file_sb_col + 2) {
+			if (len > file_rows) {
+				start += lines;
+				int maxs = len - file_rows; if (start > maxs) start = maxs;
+			}
+			wclear(current_win);
+		} else {
+			preview_scroll += lines;
+			long ptotal = (len_preview > 0) ? len_preview : preview_total_lines;
+			int maxs = ptotal > prev_rows ? (int)(ptotal - prev_rows) : 0;
+			if (preview_scroll > maxs) preview_scroll = maxs;
+			wclear(preview_win);
+		}
+		return;
+	}
+
+	/* Click to jump */
+	if (ev.bstate & BUTTON1_PRESSED) {
+		int rel_y = my - panel_top;
+		if (rel_y < 0) rel_y = 0;
+		if (rel_y >= panel_height) rel_y = panel_height - 1;
+
+		if (mx == file_sb_col) {
+			if (len > file_rows && file_rows > 1) {
+				double ratio = (double)rel_y / (panel_height - 1.0);
+				start = (int)(ratio * (len - file_rows) + 0.5);
+				if (start < 0) start = 0;
+				int maxs = len - file_rows; if (start > maxs) start = maxs;
+				wclear(current_win);
+			}
+		} else if (mx == preview_sb_col) {
+			long ptotal = (len_preview > 0) ? len_preview : preview_total_lines;
+			if (ptotal > prev_rows && prev_rows > 1) {
+				double ratio = (double)rel_y / (panel_height - 1.0);
+				preview_scroll = (int)(ratio * (ptotal - prev_rows) + 0.5);
+				if (preview_scroll < 0) preview_scroll = 0;
+				wclear(preview_win);
+			}
+		}
+
+		dragging_file   = (mx == file_sb_col);
+		dragging_preview = (mx == preview_sb_col);
+	}
+
+	/* Drag */
+	if ((dragging_file || dragging_preview) &&
+	    (ev.bstate & (BUTTON1_PRESSED | REPORT_MOUSE_POSITION | BUTTON1_RELEASED))) {
+
+		int rel_y = my - panel_top;
+		if (rel_y < 0) rel_y = 0;
+		if (rel_y >= panel_height) rel_y = panel_height - 1;
+
+		if (dragging_file && len > file_rows && file_rows > 1) {
+			double ratio = (double)rel_y / (panel_height - 1.0);
+			start = (int)(ratio * (len - file_rows) + 0.5);
+			if (start < 0) start = 0;
+			int maxs = len - file_rows; if (start > maxs) start = maxs;
+			wclear(current_win);
+		}
+		long ptotal = (len_preview > 0) ? len_preview : preview_total_lines;
+		if (dragging_preview && ptotal > prev_rows && prev_rows > 1) {
+			double ratio = (double)rel_y / (panel_height - 1.0);
+			preview_scroll = (int)(ratio * (ptotal - prev_rows) + 0.5);
+			if (preview_scroll < 0) preview_scroll = 0;
+			wclear(preview_win);
+		}
+
+		if (ev.bstate & BUTTON1_RELEASED) {
+			dragging_file = false;
+			dragging_preview = false;
+		}
+	}
+
+	if (ev.bstate & BUTTON1_RELEASED) {
+		dragging_file = false;
+		dragging_preview = false;
+	}
+}
+
 void scrollUp(void) {
 	selection--;
 	selection = ( selection < 0 ) ? 0 : selection;
@@ -1014,6 +1288,8 @@ void help(WINDOW *main_win) {
     mvwprintw(help_win, line++, 2, " +       Add bookmark (It will ask to bind a key to this bookmark)");
     mvwprintw(help_win, line++, 2, " - + key Remove bookmark");
     mvwprintw(help_win, line++, 2, " = + key Open bookmark ");
+    mvwprintw(help_win, line++, 2, " J/K     Scroll preview pane (text/hex/dir listings)");
+    mvwprintw(help_win, line++, 2, " [ / ]   Page up/down in preview pane");
     mvwprintw(help_win, line++, 2, " ?       Show this help");
     mvwprintw(help_win, line++, 2, " q       Quit");
     // Future: use an array of {char key; const char* desc;} and loop
