@@ -29,6 +29,8 @@
 // Set to 1 if you want to see hidden files on startup
 #define SHOW_HIDDEN false
 
+// (P_SEPARATOR was removed per user request for visual symmetry — both scrollbars now on the right of their panes)
+
 // Set to false if you don't want to see number of selected files in the statusbar
 #define SHOW_SELECTION_COUNT true
 

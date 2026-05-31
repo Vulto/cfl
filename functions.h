@@ -15,8 +15,16 @@
 #include <linux/limits.h>
 #include <sys/ioctl.h>
 #include <magic.h>
+#include <time.h>
 
 #include "config.h"
+
+#define UI_MARGIN 1   /* one empty line/column around the entire terminal */
+
+static inline int ui_top(void)    { return UI_MARGIN; }
+static inline int ui_left(void)   { return UI_MARGIN; }
+static inline int ui_height(void) { return LINES - 2 * UI_MARGIN; }
+static inline int ui_width(void)  { return COLS  - 2 * UI_MARGIN; }
 
 sigset_t x;
 int raised_signal = -1;
@@ -81,10 +89,10 @@ void getLastToken(char *tokenizer);
 void displayAlert(char *message);
 int isRegularFile(const char *path);
 
-// Scrollbar helper (reusable for file list right + preview left). Implemented later in this file.
+// Scrollbar helper (reusable for file list right + preview right for symmetry). Implemented later in this file.
 void drawScrollbar(WINDOW *win, int total, int first_visible, bool on_left);
 void drawFileListScrollbar(void);
-void drawPanelSeparator(void);
+// drawPanelSeparator removed (user requested no separator between panes)
 
 #include "bookmark.h"
 #include "preview.h"
@@ -112,7 +120,8 @@ void handleResize(void) {
 	refresh();                    /* ncurses reads new LINES/COLS */
 
 	getmaxyx(stdscr, maxy, maxx);
-	maxy = maxy - 2;
+	/* usable height for old scroll logic (panels) */
+	maxy = LINES - 2 * UI_MARGIN - 2;   /* account for margins + status */
 
 	if (status_win)  delwin(status_win);
 	if (current_win) delwin(current_win);
@@ -236,19 +245,29 @@ void handleFlags(char** directories) {
 }
 
 void initWindows(void) {
-	/* Basic status bar */
-	status_win = newwin(2, maxx, 0, 0);
+	/* Respect one empty line margin around the entire terminal */
+	int margin = UI_MARGIN;
+	int content_top  = margin;
+	int content_left = margin;
+	int content_h    = LINES - 2 * margin;
+	int content_w    = COLS  - 2 * margin;
 
-	starty = 2;
+	/* Status bar: 2 lines high, starting after top margin */
+	status_win = newwin(2, content_w, content_top, content_left);
 
-	/* Dynamic split for nice scrollbar + separator placement (right side of list, left side of preview) */
-	preview_start = (maxx * 2) / 5 + 2;   /* left panel ~40% + padding for bar */
+	/* Panels start below the status bar */
+	starty = content_top + 2;
+	int panel_height = content_h - 2;   /* leave bottom margin */
 
-	int left_w  = preview_start;                 /* includes space for right scrollbar column */
-	int right_w = maxx - preview_start - 1;
+	/* Dynamic split for right-side scrollbars on both panes */
+	int left_w  = (content_w * 2) / 5 + 2;
+	int sep_col = content_left + left_w;
+	int right_w = content_w - left_w - 1;
 
-	current_win = newwin(maxy, left_w,  starty, 0);
-	preview_win = newwin(maxy, right_w, starty, preview_start + 1);
+	preview_start = sep_col;   /* column where preview area effectively starts */
+
+	current_win  = newwin(panel_height, left_w,  starty, content_left);
+	preview_win  = newwin(panel_height, right_w, starty, sep_col + 1);
 
 	keypad(current_win, TRUE);
 	sigprocmask(SIG_UNBLOCK, &x, NULL);
@@ -258,6 +277,23 @@ int isRegularFile(const char *path) {
 	struct stat st;
 	if (stat(path, &st) != 0) return 0;
 	return S_ISREG(st.st_mode);
+}
+
+int isSymlink(const char *path) {
+	struct stat st;
+	if (lstat(path, &st) != 0) return 0;
+	return S_ISLNK(st.st_mode);
+}
+
+int readSymlinkTarget(const char *path, char *buf, size_t bufsz) {
+	if (!path || !buf || bufsz == 0) return -1;
+	ssize_t n = readlink(path, buf, bufsz - 1);
+	if (n < 0) {
+		buf[0] = '\0';
+		return -1;
+	}
+	buf[n] = '\0';
+	return 0;
 }
 
 void displayStatus(void) {
@@ -762,24 +798,9 @@ void refreshWindows(void) {
 	wrefresh(preview_win);
 }
 
-/* Thin vertical separator between file list and preview (drawn on stdscr for reliability).
- * Positioned at preview_start using A_DIM + ACS_VLINE to match scrollbar style.
- */
-void drawPanelSeparator(void) {
-	if (preview_start < 1 || preview_start >= maxx - 1) return;
-
-	int sep_height = maxy;  /* roughly matches panel height */
-	if (sep_height > 0) {
-		wattrset(stdscr, A_DIM);
-		mvwvline(stdscr, starty, preview_start, ACS_VLINE, sep_height);
-		wnoutrefresh(stdscr);
-	}
-}
-
 /* Reusable thin proportional thumb-only scrollbar.
  * Drawn inside the given window on left (col 0) or right (last col) edge.
- * Matches the final polished design: ACS_VLINE + A_DIM, FP math, hide when fits,
- * explicit column clear first (no rail/track).
+ * Both the file-list bar and the preview bar are now placed on the right edge of their panes.
  */
 void drawScrollbar(WINDOW *win, int total, int first_visible, bool on_left) {
 	if (!win || total <= 0) return;
@@ -913,8 +934,8 @@ void handleMouse(void) {
 	getmaxyx(preview_win, prev_rows, prev_cols);
 	(void)prev_begy;
 
-	int file_sb_col    = file_begx + file_cols - 1; /* right edge of left panel */
-	int preview_sb_col = prev_begx;                  /* left edge of right panel */
+	int file_sb_col    = file_begx + file_cols - 1;                    /* right edge of left panel */
+	int preview_sb_col = prev_begx + prev_cols - 1;                    /* right edge of right panel (symmetric) */
 
 	int panel_top    = file_begy;
 	int panel_height = file_rows;
@@ -995,7 +1016,7 @@ void handleMouse(void) {
 			wclear(current_win);
 		}
 		long ptotal = (len_preview > 0) ? len_preview : preview_total_lines;
-		if (dragging_preview && ptotal > prev_rows && prev_rows > 1) {
+		if (dragging_preview && ptotal > prev_rows && prev_rows > 1) {  /* right edge of preview pane */
 			double ratio = (double)rel_y / (panel_height - 1.0);
 			preview_scroll = (int)(ratio * (ptotal - prev_rows) + 0.5);
 			if (preview_scroll < 0) preview_scroll = 0;
@@ -1318,4 +1339,89 @@ void WrappeUp(void) {
     ueberzugpp_remove();
 	ueberzugpp_stop();
 	endwin();
+}
+
+/* ============================================================
+ * Richer File Info (restored/enhanced 'i' key behavior)
+ * ============================================================ */
+
+static const char *human_size(off_t bytes, char *buf, size_t bufsz) {
+    const char *units[] = {"B", "K", "M", "G", "T"};
+    double size = bytes;
+    int u = 0;
+    while (size >= 1024.0 && u < 4) {
+        size /= 1024.0;
+        u++;
+    }
+    snprintf(buf, bufsz, "%.1f%s", size, units[u]);
+    return buf;
+}
+
+void show_file_info(const char *fullpath) {
+    struct stat st;
+    if (stat(fullpath, &st) != 0) {
+        displayAlert("Cannot stat file");
+        return;
+    }
+
+    int win_h = 12;
+    int win_w = 60;
+    int starty = (LINES - win_h) / 2;
+    int startx = (COLS  - win_w) / 2;
+
+    WINDOW *win = newwin(win_h, win_w, starty, startx);
+    if (!win) return;
+
+    box(win, 0, 0);
+    mvwprintw(win, 0, 2, " File Info ");
+
+    char hsize[32];
+    human_size(st.st_size, hsize, sizeof hsize);
+
+    char mtime_str[64];
+    struct tm *tm = localtime(&st.st_mtime);
+    strftime(mtime_str, sizeof mtime_str, "%Y-%m-%d %H:%M:%S", tm);
+
+    int y = 2;
+    mvwprintw(win, y++, 2, "Name: %s", strrchr(fullpath, '/') ? strrchr(fullpath, '/') + 1 : fullpath);
+    mvwprintw(win, y++, 2, "Path: %s", fullpath);
+
+    if (S_ISLNK(st.st_mode)) {
+        char target[PATH_MAX];
+        if (readSymlinkTarget(fullpath, target, sizeof target) == 0) {
+            mvwprintw(win, y++, 2, "Type: Symlink → %s", target);
+        } else {
+            mvwprintw(win, y++, 2, "Type: Symlink (broken)");
+        }
+    } else if (S_ISDIR(st.st_mode)) {
+        mvwprintw(win, y++, 2, "Type: Directory");
+    } else if (S_ISREG(st.st_mode)) {
+        mvwprintw(win, y++, 2, "Type: Regular file");
+    } else {
+        mvwprintw(win, y++, 2, "Type: Other");
+    }
+
+    mvwprintw(win, y++, 2, "Size: %s (%lld bytes)", hsize, (long long)st.st_size);
+
+    char perms[11];
+    perms[0] = S_ISDIR(st.st_mode) ? 'd' : (S_ISLNK(st.st_mode) ? 'l' : '-');
+    perms[1] = (st.st_mode & S_IRUSR) ? 'r' : '-';
+    perms[2] = (st.st_mode & S_IWUSR) ? 'w' : '-';
+    perms[3] = (st.st_mode & S_IXUSR) ? 'x' : '-';
+    perms[4] = (st.st_mode & S_IRGRP) ? 'r' : '-';
+    perms[5] = (st.st_mode & S_IWGRP) ? 'w' : '-';
+    perms[6] = (st.st_mode & S_IXGRP) ? 'x' : '-';
+    perms[7] = (st.st_mode & S_IROTH) ? 'r' : '-';
+    perms[8] = (st.st_mode & S_IWOTH) ? 'w' : '-';
+    perms[9] = (st.st_mode & S_IXOTH) ? 'x' : '-';
+    perms[10] = '\0';
+    mvwprintw(win, y++, 2, "Perms: %s  (0%o)", perms, st.st_mode & 07777);
+
+    mvwprintw(win, y++, 2, "Modified: %s", mtime_str);
+
+    mvwprintw(win, win_h - 2, 2, "Press any key to close");
+    wrefresh(win);
+
+    wgetch(win);
+    delwin(win);
 }

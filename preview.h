@@ -12,6 +12,9 @@ int clearFlagImg = 0;
 extern int preview_scroll;       /* shared with functions.h */
 extern long preview_total_lines; /* shared with functions.h for text/hex totals */
 
+extern int isSymlink(const char *path);
+extern int readSymlinkTarget(const char *path, char *buf, size_t bufsz);
+
 /* Caching for preview target + totals (text line count or hex rows) */
 static char preview_target_path[PATH_MAX] = "";
 /* preview_total_lines is defined in functions.h and externed above */
@@ -105,9 +108,15 @@ static void ueberzugpp_stop(void) {
 }
 
 static void preview_print_message(const char *message, int maxx) {
+    (void)maxx;
+    int rows, pw;
+    getmaxyx(preview_win, rows, pw);
+    (void)rows;
+    int safe_width = pw - 3; // left pad (2) + right bar reservation
+
     wclear(preview_win);
     wmove(preview_win, 1, 2);
-    wprintw(preview_win, "%.*s", maxx - 4, message);
+    wprintw(preview_win, "%.*s", safe_width, message);
     wrefresh(preview_win);
 }
 
@@ -153,6 +162,8 @@ static void render_text_preview(const char *path, int maxx) {
     (void)cols;
     int visible = rows > 0 ? rows : 1;
 
+    int safe_width = cols - 3; // reserve right column for scrollbar (inside preview_win)
+
     /* Enforce last-line stop: max scroll so last line sits at bottom */
     long max_scroll = (total > visible) ? (total - visible) : 0;
     if (preview_scroll < 0) preview_scroll = 0;
@@ -161,7 +172,7 @@ static void render_text_preview(const char *path, int maxx) {
     FILE *fp = fopen(path, "r");
     if (!fp) {
         preview_print_message("Preview unavailable: can't open file", maxx);
-        drawScrollbar(preview_win, (int)total, preview_scroll, true);
+        drawScrollbar(preview_win, (int)total, preview_scroll, false);
         wrefresh(preview_win);
         return;
     }
@@ -180,11 +191,11 @@ static void render_text_preview(const char *path, int maxx) {
     int y = 1;
     for (int i = 0; i < avail_lines && fgets(line, sizeof(line), fp); ++i) {
         wmove(preview_win, y++, 2);
-        wprintw(preview_win, "%.*s", maxx - 4, line);
+        wprintw(preview_win, "%.*s", safe_width, line);
     }
     fclose(fp);
 
-    drawScrollbar(preview_win, (int)total, preview_scroll, true);
+    drawScrollbar(preview_win, (int)total, preview_scroll, false);
     wrefresh(preview_win);
 }
 
@@ -194,8 +205,10 @@ static void render_hex_preview(const char *path, int maxx) {
 
     int rows, cols;
     getmaxyx(preview_win, rows, cols);
-    (void)cols;
-    int visible = rows > 0 ? rows : 1;
+    (void)rows;
+    int safe_width = cols - 3; // reserve right column for scrollbar (layout consistency)
+    (void)safe_width;
+    int visible = cols > 10 ? (cols / 4) : 1;   /* rough number of hex lines that fit */
 
     long max_scroll = (total > visible) ? (total - visible) : 0;
     if (preview_scroll < 0) preview_scroll = 0;
@@ -204,7 +217,7 @@ static void render_hex_preview(const char *path, int maxx) {
     FILE *fp = fopen(path, "rb");
     if (!fp) {
         preview_print_message("Preview unavailable: can't open file", maxx);
-        drawScrollbar(preview_win, (int)total, preview_scroll, true);
+        drawScrollbar(preview_win, (int)total, preview_scroll, false);
         wrefresh(preview_win);
         return;
     }
@@ -218,7 +231,7 @@ static void render_hex_preview(const char *path, int maxx) {
     if (fseek(fp, (long)start_offset, SEEK_SET) != 0) {
         fclose(fp);
         preview_print_message("Preview unavailable: seek error", maxx);
-        drawScrollbar(preview_win, (int)total, preview_scroll, true);
+        drawScrollbar(preview_win, (int)total, preview_scroll, false);
         wrefresh(preview_win);
         return;
     }
@@ -228,7 +241,7 @@ static void render_hex_preview(const char *path, int maxx) {
     if (!buf) {
         fclose(fp);
         preview_print_message("Preview unavailable: out of memory", maxx);
-        drawScrollbar(preview_win, (int)total, preview_scroll, true);
+        drawScrollbar(preview_win, (int)total, preview_scroll, false);
         wrefresh(preview_win);
         return;
     }
@@ -262,7 +275,7 @@ static void render_hex_preview(const char *path, int maxx) {
     }
 
     free(buf);
-    drawScrollbar(preview_win, (int)total, preview_scroll, true);
+    drawScrollbar(preview_win, (int)total, preview_scroll, false);
     wrefresh(preview_win);
 }
 
@@ -340,10 +353,32 @@ void PreviewNextDir(char *next_dir_arg, char **next_directories) {
         } else {
             wattroff(preview_win, A_BOLD);
         }
-        wprintw(preview_win, "%.*s\n", maxx/2 - 3, next_directories[i]);
+
+        /* Symlink display in right-pane directory listing */
+        char entry_display[PATH_MAX * 2 + 32];
+        if (isSymlink(temp_dir)) {
+            char target[PATH_MAX];
+            if (readSymlinkTarget(temp_dir, target, sizeof target) == 0) {
+                snprintf(entry_display, sizeof entry_display, "%s → %s", next_directories[i], target);
+            } else {
+                snprintf(entry_display, sizeof entry_display, "%s → (unreadable)", next_directories[i]);
+            }
+        } else {
+            snprintf(entry_display, sizeof entry_display, "%s", next_directories[i]);
+        }
+        {
+            int rows, pw;
+            getmaxyx(preview_win, rows, pw);
+            (void)rows;
+            int safe_width = pw - 3; // reserve right column for scrollbar
+            if ((int)strlen(entry_display) > safe_width) {
+                entry_display[safe_width] = '\0';
+            }
+            wprintw(preview_win, "%s\n", entry_display);
+        }
     }
 
-    /* Left scrollbar for preview directory listing */
-    drawScrollbar(preview_win, len_preview, start, true);
+    /* Right scrollbar for preview directory listing (symmetric to file list bar) */
+    drawScrollbar(preview_win, len_preview, start, false);
 }
 #endif

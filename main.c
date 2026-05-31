@@ -32,7 +32,8 @@ int main(int argc, char* argv[]) {
         handleFlags(directories);
 
         getmaxyx(stdscr, maxy, maxx);
-        maxy = maxy - 2;
+        /* Respect 1-line top + bottom margin + status bar */
+        maxy = LINES - 2 * UI_MARGIN - 2;
 
         initWindows();
 
@@ -64,14 +65,38 @@ int main(int argc, char* argv[]) {
             wmove( current_win,t,2 );
 
             /* Reserve space for right-edge scrollbar inside current_win */
-            int dummy, list_w;
-            getmaxyx(current_win, dummy, list_w);
+            int rows, list_w;
+            getmaxyx(current_win, rows, list_w);
+            (void)rows;
             int trunc = list_w - 5;  /* left pad (2) + right bar reservation + safety */
 
-            if( checkClipboard( temp_dir ) == 0 ) {
-                wprintw( current_win, "%.*s\n", trunc, directories[i] );
+            /* Symlink display: "name → destination" using unicode arrow */
+            char entry_display[PATH_MAX * 2 + 32];
+            if (isSymlink(temp_dir)) {
+                char target[PATH_MAX];
+                if (readSymlinkTarget(temp_dir, target, sizeof target) == 0) {
+                    snprintf(entry_display, sizeof entry_display, "%s → %s", directories[i], target);
+                } else {
+                    snprintf(entry_display, sizeof entry_display, "%s → (unreadable)", directories[i]);
+                }
             } else {
-                wprintw( current_win, "* %.*s\n", (trunc > 3 ? trunc-3 : trunc), directories[i] );
+                snprintf(entry_display, sizeof entry_display, "%s", directories[i]);
+            }
+            /* Truncate the full visible string */
+            if ((int)strlen(entry_display) > trunc) {
+                entry_display[trunc] = '\0';
+            }
+
+            if( checkClipboard( temp_dir ) == 0 ) {
+                wprintw( current_win, "%s\n", entry_display );
+            } else {
+                char prefixed[PATH_MAX * 2 + 32];
+                snprintf(prefixed, sizeof prefixed, "* %s", entry_display);
+                int star_trunc = (trunc > 3 ? trunc - 2 : trunc);
+                if ((int)strlen(prefixed) > star_trunc) {
+                    prefixed[star_trunc] = '\0';
+                }
+                wprintw( current_win, "%s\n", prefixed );
             }
         }
 
@@ -123,9 +148,8 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        /* Draw file list scrollbar (right) + separator. Preview bar is drawn inside its own renderers. */
+        /* Draw the two right-side scrollbars. Preview bar is drawn inside its own renderers. */
         drawFileListScrollbar();
-        drawPanelSeparator();
         refreshWindows();
         pid_t pid = 0;
 
@@ -178,7 +202,17 @@ int main(int argc, char* argv[]) {
             case KEY_REMOVEMENU: ueberzugpp_remove(); Deleting(); break;
             case KEY_VIEWSEL: endwin(); ViewSel(pid); break;
             case KEY_EDITSEL: EditSel(pid); break;
-            case KEY_INFO: clearFlagImg = 1; break;
+            case KEY_INFO: {
+                if (len > 0) {
+                    if (build_path(temp_dir, sizeof temp_dir, dir, directories[selection]) != 0) {
+                        displayAlert("Path too long");
+                    } else {
+                        show_file_info(temp_dir);
+                    }
+                }
+                clearFlagImg = 1;   /* still clear any image preview */
+                break;
+            }
             case KEY_TOGGLEHIDE: hiddenFlag = !hiddenFlag; start = 0; selection = 0; break;
             case KEY_BOOKMARK: go_bookmark(); break;
             case KEY_ADDBOOKMARK: add_bookmark(); break;
