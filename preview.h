@@ -2,6 +2,9 @@
 #define CFL_PREVIEW_H
 
 #include <ctype.h>
+int preview_start;     /* column for preview pane start / right scrollbar position */
+int preview_scroll = 0; /* current scroll offset for preview pane (dir listings + text/hex) */
+long preview_total_lines = 0; /* cached total for current text/hex preview (lines or hex-rows) */
 
 int len_preview = 0;
 static pid_t ueberzug_pid = -1;
@@ -197,6 +200,60 @@ static void render_text_preview(const char *path, int maxx) {
 
     drawScrollbar(preview_win, (int)total, preview_scroll, false);
     wrefresh(preview_win);
+}
+
+/* Small helper for preview visible height (used by clamping) */
+static inline int get_preview_visible_rows(void) {
+	if (!preview_win) return 20;
+	int r, c;
+	getmaxyx(preview_win, r, c);
+	return (r > 0) ? r : 1;
+}
+
+/* Preview scrolling helpers with proper last-line clamping (total - visible) */
+void previewScrollUp(void) {
+	if (preview_scroll > 0) {
+		preview_scroll--;
+	}
+}
+
+void previewScrollDown(void) {
+	int visible = get_preview_visible_rows();
+	long total = (len_preview > 0) ? len_preview : preview_total_lines;
+
+	if (total > 0) {
+		long max_start = total - visible;
+		if (max_start < 0) max_start = 0;
+
+		preview_scroll++;
+		if (preview_scroll > max_start) {
+			preview_scroll = (int)max_start;
+		}
+	} else {
+		preview_scroll++;
+	}
+}
+
+void previewPageUp(void) {
+	preview_scroll -= 10;
+	if (preview_scroll < 0) preview_scroll = 0;
+}
+
+void previewPageDown(void) {
+	int visible = get_preview_visible_rows();
+	long total = (len_preview > 0) ? len_preview : preview_total_lines;
+
+	if (total > 0) {
+		long max_start = total - visible;
+		if (max_start < 0) max_start = 0;
+
+		preview_scroll += visible;
+		if (preview_scroll > max_start) {
+			preview_scroll = (int)max_start;
+		}
+	} else {
+		preview_scroll += 10;
+	}
 }
 
 static void render_hex_preview(const char *path, int maxx) {

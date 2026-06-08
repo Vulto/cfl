@@ -2,24 +2,6 @@
 #define CFL_BOOKMARK_H
 char* bookmarks_path = NULL;
 
-static int bookmark_find(char key, char *out_path, size_t out_size) {
-    FILE *f = fopen(bookmarks_path, "r");
-    if (!f) return 0;
-
-    char line[PATH_MAX + 8];
-    while (fgets(line, sizeof(line), f)) {
-        if (line[0] != key || line[1] != ':') continue;
-        char *path_start = line + 2;
-        path_start[strcspn(path_start, "\n")] = '\0';
-        snprintf(out_path, out_size, "%s", path_start);
-        fclose(f);
-        return 1;
-    }
-
-    fclose(f);
-    return 0;
-}
-
 static void bookmark_set(char key, const char *target_path) {
     FILE *in = fopen(bookmarks_path, "r");
     FILE *out = fopen(temp_clipboard_path, "w");
@@ -82,12 +64,6 @@ static void bookmark_remove(char key) {
         displayAlert("Bookmark key not found");
     }
 }
-
-/* Old tiny prompt versions removed — now provided by the rich UI below */
-
-/* ============================================================
- * Nice Bookmark List UI (restored rich version)
- * ============================================================ */
 
 enum {
     BM_BROWSE = 0,
@@ -239,16 +215,13 @@ static void show_bookmark_ui(int initial_mode) {
 
     int win_h = 18;
     int win_w = 70;
-    int starty = (LINES - win_h) / 2;
-    int startx = (COLS  - win_w) / 2;
 
-    WINDOW *win = newwin(win_h, win_w, starty, startx);
+    ui_overlay_backdrop();
+    WINDOW *win = ui_modal_create(win_h, win_w);
     if (!win) {
         free(bookmarks);
         return;
     }
-
-    keypad(win, TRUE);
 
     int running = 1;
     while (running) {
@@ -300,20 +273,20 @@ static void show_bookmark_ui(int initial_mode) {
         }
         else if (mode == BM_ADD) {
             if (ch == '\n' || ch == KEY_ENTER) {
-                // Simple key prompt for adding (kept minimal)
-                delwin(win);
-                WINDOW *kwin = newwin(3, 48, (LINES - 3) / 2, (COLS - 48) / 2);
-                box(kwin, 0, 0);
-                mvwprintw(kwin, 1, 1, "Save current dir to key: ");
-                wrefresh(kwin);
-                int key = wgetch(kwin);
-                delwin(kwin);
+                ui_modal_destroy(win);
+                win = NULL;
 
+                int key = ui_prompt_key("Save current dir to key: ");
                 if (key != ERR) {
                     bookmark_set((char)key, dir);
                 }
-                win = newwin(win_h, win_w, starty, startx);
-                keypad(win, TRUE);
+
+                ui_overlay_backdrop();
+                win = ui_modal_create(win_h, win_w);
+                if (!win) {
+                    running = 0;
+                    break;
+                }
                 mode = BM_BROWSE;
             }
             else if (ch == 'q' || ch == KEY_ESCAPE) {
@@ -339,7 +312,7 @@ static void show_bookmark_ui(int initial_mode) {
         }
     }
 
-    delwin(win);
+    ui_modal_destroy(win);
     free(bookmarks);
 }
 

@@ -18,25 +18,15 @@
 #include <time.h>
 
 #include "config.h"
-
-#define UI_MARGIN 1   /* one empty line/column around the entire terminal */
-
-static inline int ui_top(void)    { return UI_MARGIN; }
-static inline int ui_left(void)   { return UI_MARGIN; }
-static inline int ui_height(void) { return LINES - 2 * UI_MARGIN; }
-static inline int ui_width(void)  { return COLS  - 2 * UI_MARGIN; }
+#include "ui.h"
 
 sigset_t x;
 int raised_signal = -1;
-int len = 0;
 int len_bookmarks = 0;
 int len_scripts = 0;
-int selectedFiles = 0;
 int i = 0;
 int allocSize;
-char selected_file[NAME_MAX];
 
-char dir  [PATH_MAX];
 char next_dir  [PATH_MAX];
 char prev_dir  [PATH_MAX];
 char temp_dir  [PATH_MAX];
@@ -50,21 +40,11 @@ char* cache_path = NULL;
 char* clipboard_path = NULL;
 char* temp_clipboard_path = NULL;
 char* trash_path = NULL;
-int selection = 0;
-int start = 0;
 int clearFlag = 0;
 int searchFlag = 0;
 int backFlag = 0;
 int hiddenFlag = SHOW_HIDDEN;
 char* last = NULL;
-WINDOW* current_win;
-WINDOW* preview_win;
-WINDOW* status_win;
-WINDOW* keys_win;
-int startx, starty, maxx, maxy;
-int preview_start;     /* column for preview pane start / right scrollbar position */
-int preview_scroll = 0; /* current scroll offset for preview pane (dir listings + text/hex) */
-long preview_total_lines = 0; /* cached total for current text/hex preview (lines or hex-rows) */
 bool Running = true;
 char secondKey;
 char *buf;
@@ -83,55 +63,13 @@ static int build_path(char *dst, size_t dstsz, const char *base, const char *ent
 }
 
 // Ueberzug++ helpers (declared here because functions.h is included before their definitions)
-void initWindows(void);
 void openFile(char *filepath);
 void getLastToken(char *tokenizer);
 void displayAlert(char *message);
 int isRegularFile(const char *path);
 
-// Scrollbar helper (reusable for file list right + preview right for symmetry). Implemented later in this file.
-void drawScrollbar(WINDOW *win, int total, int first_visible, bool on_left);
-void drawFileListScrollbar(void);
-// drawPanelSeparator removed (user requested no separator between panes)
-
 #include "bookmark.h"
 #include "preview.h"
-
-void cursesInit(void) {
-	initscr();
-	noecho();
-	curs_set(0);
-	keypad(stdscr, TRUE);
-
-	if (has_colors()) {
-		start_color();
-		use_default_colors();
-		init_pair(1, COLOR_BLACK, COLOR_WHITE);
-		init_pair(2, COLOR_WHITE, 8);
-	}
-
-	/* Mouse for scrollbar interaction (wheel, click, drag on both bars) */
-	mousemask(BUTTON1_PRESSED | BUTTON1_RELEASED | BUTTON4_PRESSED | BUTTON5_PRESSED | REPORT_MOUSE_POSITION, NULL);
-	mouseinterval(0);
-}
-
-void handleResize(void) {
-	endwin();
-	refresh();                    /* ncurses reads new LINES/COLS */
-
-	getmaxyx(stdscr, maxy, maxx);
-	/* usable height for old scroll logic (panels) */
-	maxy = LINES - 2 * UI_MARGIN - 2;   /* account for margins + status */
-
-	if (status_win)  delwin(status_win);
-	if (current_win) delwin(current_win);
-	if (preview_win) delwin(preview_win);
-	if (keys_win)    delwin(keys_win);
-
-	status_win = current_win = preview_win = keys_win = NULL;
-
-	initWindows();
-}
 
 int getFiles(char* directory, char*** target) {
 	int i = 0;
@@ -244,33 +182,28 @@ void handleFlags(char** directories) {
 	}
 }
 
+// Moving this function to ui.h requires further refactoring
 void initWindows(void) {
-	/* Respect one empty line margin around the entire terminal */
+	int content_left, panel_top, panel_height, sep_col;
+	ui_get_layout(&content_left, &panel_top, &panel_height, &sep_col);
+
 	int margin = UI_MARGIN;
-	int content_top  = margin;
-	int content_left = margin;
-	int content_h    = LINES - 2 * margin;
-	int content_w    = COLS  - 2 * margin;
-
-	/* Status bar: 2 lines high, starting after top margin */
-	status_win = newwin(2, content_w, content_top, content_left);
-
-	/* Panels start below the status bar */
-	starty = content_top + 2;
-	int panel_height = content_h - 2;   /* leave bottom margin */
-
-	/* Dynamic split for right-side scrollbars on both panes */
+	int content_w = COLS - 2 * margin;
 	int left_w  = (content_w * 2) / 5 + 2;
-	int sep_col = content_left + left_w;
 	int right_w = content_w - left_w - 1;
 
-	preview_start = sep_col;   /* column where preview area effectively starts */
+	status_win = newwin(2, content_w, margin, content_left);
 
-	current_win  = newwin(panel_height, left_w,  starty, content_left);
-	preview_win  = newwin(panel_height, right_w, starty, sep_col + 1);
+	starty = panel_top;
+	preview_start = sep_col;
+
+	current_win = newwin(panel_height, left_w,  starty, content_left);
+	preview_win = newwin(panel_height, right_w, starty, sep_col + 1);
 
 	keypad(current_win, TRUE);
 	sigprocmask(SIG_UNBLOCK, &x, NULL);
+
+	ui_clear_gaps();
 }
 
 int isRegularFile(const char *path) {
@@ -294,49 +227,6 @@ int readSymlinkTarget(const char *path, char *buf, size_t bufsz) {
 	}
 	buf[n] = '\0';
 	return 0;
-}
-
-void displayStatus(void) {
-	wclear(status_win);
-	wmove(status_win,0,0);
-	if(SHOW_SELECTION_COUNT == 1) {
-		wprintw(status_win,"[%d] ", selectedFiles);
-	}
-	wprintw(status_win, "(%d/%d)", selection+1, len);
-	wprintw(status_win, " %s", dir);
-	if(strcasecmp(dir,"/") == 0) {
-		wprintw(status_win, "%s", selected_file);
-	} else {
-		wprintw(status_win, "/%s", selected_file);
-	}
-	/* line 1 intentionally left blank as a separator */
-	wrefresh(status_win);
-}
-
-void displayAlert(char *message) {
-	int msgLen = strlen(message) + 1;
-	int rows, cols;
-
-	getmaxyx(stdscr, rows, cols);
-
-	int winHeight = 3;
-	int winWidth = msgLen + 2;
-	int startY = (rows - winHeight) / 2;
-	int startX = (cols - winWidth) / 2;
-
-	WINDOW *statusWin = newwin(winHeight, winWidth, startY, startX);
-
-	box(statusWin, 0, 0);
-
-	wattron(statusWin, A_BOLD);
-	mvwprintw(statusWin, 1, 1, "%s", message);
-	wattroff(statusWin, A_BOLD);
-
-	wrefresh(statusWin);
-
-	getch();
-
-	delwin(statusWin);
 }
 
 void setSelectionCount(void) {
@@ -481,11 +371,7 @@ void init(int argc, char* argv[]) {
 }
 
 int fileExists(char *file) {
-	if( access ( file, F_OK ) != -1 ) {
-		return EXIT_FAILURE;
-	} else {
-		return EXIT_SUCCESS;
-	}
+    return (access(file, F_OK) != -1) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
 char* replace(char* str, char* a, char* b) {
@@ -600,11 +486,7 @@ void getParentPath(char *path) {
 }
 
 int getWritePermissions(char *path) {
-	if( access(path, W_OK) == 0 ) {
-		return 1;
-	} else {
-		return 0;
-	}
+    return (access(path, W_OK) == 0) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
 void copyFiles(char *present_dir) {
@@ -627,9 +509,9 @@ void copyFiles(char *present_dir) {
 		pid_t pid = fork();
 		if(pid == 0) {
 			if(flag == 0) { 
-				execlp("cp", "cp", "-r", "-v", buf, present_dir, (char *)0);
+				execlp("cp", "cp", "-dirv", buf, present_dir, (char *)0);
 			} else {
-				execlp("sudo", "sudo", "cp", "-r", "-v", buf, present_dir, (char *)0);
+				execlp("sudo", "sudo", "cp", "-dirv", buf, present_dir, (char *)0);
 			}
 			exit(1);
 		} else {
@@ -743,7 +625,7 @@ void renameFiles(char **directories){
 
 				pid = fork();
 				if( pid == 0 ) {
-					execlp("mv", "mv", "-vn", buf, buf2, (char *)0);
+					execlp("mv", "mv", "-ivn", buf, buf2, (char *)0);
 					exit(1);
 				} else {
 					int status;
@@ -791,123 +673,6 @@ void moveFiles(char *present_dir) {
 	fclose(f);
 	refresh();
 	remove(clipboard_path);
-}
-
-void refreshWindows(void) {
-	wrefresh(current_win);
-	wrefresh(preview_win);
-}
-
-/* Reusable thin proportional thumb-only scrollbar.
- * Drawn inside the given window on left (col 0) or right (last col) edge.
- * Both the file-list bar and the preview bar are now placed on the right edge of their panes.
- */
-void drawScrollbar(WINDOW *win, int total, int first_visible, bool on_left) {
-	if (!win || total <= 0) return;
-
-	int win_rows, win_cols;
-	getmaxyx(win, win_rows, win_cols);
-	if (win_rows <= 1 || win_cols <= 2) return;
-
-	int bar_col = on_left ? 0 : (win_cols - 1);
-
-	if (total <= win_rows) {
-		/* Content fits: hide cleanly by clearing the column */
-		wattrset(win, A_NORMAL);
-		for (int r = 0; r < win_rows; r++) {
-			mvwaddch(win, r, bar_col, ' ');
-		}
-		return;
-	}
-
-	/* Proportional thumb (only) using floating point for smoothness */
-	double vis_f = (double)win_rows;
-	double scrollable = (double)total - vis_f;
-
-	int thumb_h = (int)((vis_f / (double)total) * vis_f + 0.5);
-	if (thumb_h < 1) thumb_h = 1;
-	if (thumb_h > win_rows) thumb_h = win_rows;
-
-	double pos = 0.0;
-	if (scrollable > 0.0) {
-		pos = (double)first_visible / scrollable * (vis_f - thumb_h);
-	}
-	int thumb_start = (int)(pos + 0.5);
-	if (thumb_start < 0) thumb_start = 0;
-	if (thumb_start + thumb_h > win_rows) thumb_start = win_rows - thumb_h;
-
-	/* Clear then draw only the thumb segment */
-	wattrset(win, A_NORMAL);
-	for (int r = 0; r < win_rows; r++) {
-		mvwaddch(win, r, bar_col, ' ');
-	}
-
-	wattrset(win, A_DIM);
-	for (int r = 0; r < thumb_h; r++) {
-		mvwaddch(win, thumb_start + r, bar_col, ACS_VLINE);
-	}
-	wattrset(win, A_NORMAL);
-}
-
-/* Convenience wrapper for the file list (always right edge, using global len/start) */
-void drawFileListScrollbar(void) {
-	if (current_win) {
-		drawScrollbar(current_win, len, start, false);  /* false = right side */
-	}
-}
-
-/* Small helper for preview visible height (used by clamping) */
-static inline int get_preview_visible_rows(void) {
-	if (!preview_win) return 20;
-	int r, c;
-	getmaxyx(preview_win, r, c);
-	return (r > 0) ? r : 1;
-}
-
-/* Preview scrolling helpers with proper last-line clamping (total - visible) */
-void previewScrollUp(void) {
-	if (preview_scroll > 0) {
-		preview_scroll--;
-	}
-}
-
-void previewScrollDown(void) {
-	int visible = get_preview_visible_rows();
-	long total = (len_preview > 0) ? len_preview : preview_total_lines;
-
-	if (total > 0) {
-		long max_start = total - visible;
-		if (max_start < 0) max_start = 0;
-
-		preview_scroll++;
-		if (preview_scroll > max_start) {
-			preview_scroll = (int)max_start;
-		}
-	} else {
-		preview_scroll++;
-	}
-}
-
-void previewPageUp(void) {
-	preview_scroll -= 10;
-	if (preview_scroll < 0) preview_scroll = 0;
-}
-
-void previewPageDown(void) {
-	int visible = get_preview_visible_rows();
-	long total = (len_preview > 0) ? len_preview : preview_total_lines;
-
-	if (total > 0) {
-		long max_start = total - visible;
-		if (max_start < 0) max_start = 0;
-
-		preview_scroll += visible;
-		if (preview_scroll > max_start) {
-			preview_scroll = (int)max_start;
-		}
-	} else {
-		preview_scroll += 10;
-	}
 }
 
 /* Full mouse handler for both scrollbars + wheel.
@@ -1163,13 +928,16 @@ void goShell(pid_t pid) {
 
 void Deleting(void) {
 	if( fileExists(clipboard_path) == 1 ) {
-		keys_win = newwin(3, maxx, starty + maxy - 3, 0);
-		wprintw(keys_win,"Key\tCommand");
-		wprintw(keys_win,"\n%c\tMove to Garbage Can", KEY_GARBAGE);
-		wprintw(keys_win,"\n%c\tDelete", KEY_DELETE);
+		ui_overlay_backdrop();
+		keys_win = ui_modal_create(5, 40);
+		if (!keys_win) return;
+		mvwprintw(keys_win, 1, 2, "Key\tCommand");
+		mvwprintw(keys_win, 2, 2, "%c\tMove to Garbage Can", KEY_GARBAGE);
+		mvwprintw(keys_win, 3, 2, "%c\tDelete", KEY_DELETE);
 		wrefresh(keys_win);
-		secondKey = wgetch(current_win);
-		delwin(keys_win);
+		secondKey = wgetch(keys_win);
+		ui_modal_destroy(keys_win);
+		keys_win = NULL;
 		if(secondKey == KEY_GARBAGE) {
 			moveFiles(trash_path);
 		} else if( secondKey == KEY_DELETE ) {
@@ -1232,20 +1000,8 @@ void EditSel(pid_t pid) {
 }
 
 void CreateDir() {
-	int height = 3, width = 50;
-	int startY = (LINES - height) / 2;
-	int startX = (COLS - width) / 2;
-	WINDOW *subWin = newwin(height, width, startY, startX);
-
-	box(subWin, 0, 0);
-	mvwprintw(subWin, 1, 1, "Enter directory name: ");
-	wrefresh(subWin);
-
-	char dirName[256];
-	echo();
-	mvwgetnstr(subWin, 1, 22, dirName, 255);
-	noecho();
-	delwin(subWin);
+	char dirName[256] = {0};
+	ui_prompt_string("Enter directory name: ", dirName, 256);
 
 	if (strlen(dirName) == 0) {
 		displayAlert("Directory name cannot be empty");
@@ -1279,16 +1035,14 @@ void openFile(char *filepath) {
 }
 
 void help(WINDOW *main_win) {
-    // Help Subwindow
-    int rows = LINES / 2;   // border/margin
+    (void)main_win;
+    int rows = LINES / 2;
     int cols = COLS / 2;
-    int starty = (LINES - rows) / 2;
-    int startx = (COLS - cols) / 2;
 
-    WINDOW *help_win = newwin(rows, cols, starty, startx);
+    ui_overlay_backdrop();
+    WINDOW *help_win = ui_modal_create(rows, cols);
     if (!help_win) return;
 
-    box(help_win, 0, 0);
     mvwprintw(help_win, 0, (cols - 14)/2, " cfl Keybindings ");
 
     // title or header
@@ -1322,9 +1076,7 @@ void help(WINDOW *main_win) {
     // Wait for any keypress
     wgetch(help_win);
 
-    delwin(help_win);
-    touchwin(main_win);  // refresh main
-    wrefresh(main_win);
+    ui_modal_destroy(help_win);
 }
 
 void WrappeUp(void) {
@@ -1342,9 +1094,8 @@ void WrappeUp(void) {
 }
 
 /* ============================================================
- * Richer File Info (restored/enhanced 'i' key behavior)
+ * File Info (restored/enhanced 'i' key behavior)
  * ============================================================ */
-
 static const char *human_size(off_t bytes, char *buf, size_t bufsz) {
     const char *units[] = {"B", "K", "M", "G", "T"};
     double size = bytes;
@@ -1366,13 +1117,11 @@ void show_file_info(const char *fullpath) {
 
     int win_h = 12;
     int win_w = 60;
-    int starty = (LINES - win_h) / 2;
-    int startx = (COLS  - win_w) / 2;
 
-    WINDOW *win = newwin(win_h, win_w, starty, startx);
+    ui_overlay_backdrop();
+    WINDOW *win = ui_modal_create(win_h, win_w);
     if (!win) return;
 
-    box(win, 0, 0);
     mvwprintw(win, 0, 2, " File Info ");
 
     char hsize[32];
@@ -1423,5 +1172,5 @@ void show_file_info(const char *fullpath) {
     wrefresh(win);
 
     wgetch(win);
-    delwin(win);
+    ui_modal_destroy(win);
 }

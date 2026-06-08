@@ -36,6 +36,7 @@ int main(int argc, char* argv[]) {
         maxy = LINES - 2 * UI_MARGIN - 2;
 
         initWindows();
+        wclear(current_win);
 
         int t = 0;
         for( i = start ; i < len ; i++, t++ ) {

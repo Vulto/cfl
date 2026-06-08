@@ -18,7 +18,7 @@
                 "-Wmissing-include-dirs",   \
                 "-Wunused-variable",        \
                 "-std=c23",                 \
-                "-O3",                      \
+                "-O0",                      \
                 "-D_POSIX_C_SOURCE=200809L"
 
 #define OLD "c.old"
