@@ -12,6 +12,11 @@ static FILE *ueberzug_in = NULL;
 static int ueberzug_failed = 0;
 int clearFlagImg = 0;
 
+/* Track last ueberzug image so we can skip remove when next is equal/larger */
+static int ueberzug_showing = 0;
+static int ueberzug_last_w = 0;
+static int ueberzug_last_h = 0;
+
 extern int preview_scroll;       /* shared with functions.h */
 extern long preview_total_lines; /* shared with functions.h for text/hex totals */
 
@@ -21,6 +26,149 @@ extern int readSymlinkTarget(const char *path, char *buf, size_t bufsz);
 /* Caching for preview target + totals (text line count or hex rows) */
 static char preview_target_path[PATH_MAX] = "";
 /* preview_total_lines is defined in functions.h and externed above */
+
+static unsigned img_be16(const unsigned char *p) {
+    return ((unsigned)p[0] << 8) | (unsigned)p[1];
+}
+static unsigned img_be32(const unsigned char *p) {
+    return ((unsigned)p[0] << 24) | ((unsigned)p[1] << 16) |
+           ((unsigned)p[2] << 8) | (unsigned)p[3];
+}
+static unsigned img_le16(const unsigned char *p) {
+    return (unsigned)p[0] | ((unsigned)p[1] << 8);
+}
+static unsigned img_le32(const unsigned char *p) {
+    return (unsigned)p[0] | ((unsigned)p[1] << 8) |
+           ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
+}
+
+/* Fast header-only dimension probe (no external tools). Returns 1 on success. */
+static int image_dimensions(const char *path, int *out_w, int *out_h) {
+    if (!path || !out_w || !out_h) return 0;
+    *out_w = *out_h = 0;
+
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return 0;
+
+    unsigned char buf[64];
+    size_t n = fread(buf, 1, sizeof buf, fp);
+    if (n < 24) {
+        fclose(fp);
+        return 0;
+    }
+
+    /* PNG: 8-byte sig + IHDR length/type + 8-byte width/height */
+    static const unsigned char png_sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+    if (n >= 24 && memcmp(buf, png_sig, 8) == 0) {
+        unsigned w = img_be32(buf + 16);
+        unsigned h = img_be32(buf + 20);
+        fclose(fp);
+        if (w == 0 || h == 0 || w > 65535 || h > 65535) return 0;
+        *out_w = (int)w;
+        *out_h = (int)h;
+        return 1;
+    }
+
+    /* GIF */
+    if (n >= 10 && (memcmp(buf, "GIF87a", 6) == 0 || memcmp(buf, "GIF89a", 6) == 0)) {
+        unsigned w = img_le16(buf + 6);
+        unsigned h = img_le16(buf + 8);
+        fclose(fp);
+        if (w == 0 || h == 0) return 0;
+        *out_w = (int)w;
+        *out_h = (int)h;
+        return 1;
+    }
+
+    /* BMP */
+    if (n >= 26 && buf[0] == 'B' && buf[1] == 'M') {
+        unsigned w = img_le32(buf + 18);
+        unsigned h = img_le32(buf + 22);
+        /* height may be negative (top-down DIB) */
+        if ((int)h < 0) h = (unsigned)(-(int)h);
+        fclose(fp);
+        if (w == 0 || h == 0) return 0;
+        *out_w = (int)w;
+        *out_h = (int)h;
+        return 1;
+    }
+
+    /* WebP: RIFF....WEBP */
+    if (n >= 30 && memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WEBP", 4) == 0) {
+        if (memcmp(buf + 12, "VP8X", 4) == 0 && n >= 30) {
+            /* canvas size is 24-bit little-endian minus 1 */
+            unsigned w = 1 + (buf[24] | (buf[25] << 8) | (buf[26] << 16));
+            unsigned h = 1 + (buf[27] | (buf[28] << 8) | (buf[29] << 16));
+            fclose(fp);
+            *out_w = (int)w;
+            *out_h = (int)h;
+            return 1;
+        }
+        if (memcmp(buf + 12, "VP8 ", 4) == 0 && n >= 30) {
+            /* lossy: start code then 16-bit le width/height in bits */
+            unsigned w = img_le16(buf + 26) & 0x3fff;
+            unsigned h = img_le16(buf + 28) & 0x3fff;
+            fclose(fp);
+            if (w == 0 || h == 0) return 0;
+            *out_w = (int)w;
+            *out_h = (int)h;
+            return 1;
+        }
+        if (memcmp(buf + 12, "VP8L", 4) == 0 && n >= 25) {
+            unsigned b0 = buf[21], b1 = buf[22], b2 = buf[23], b3 = buf[24];
+            unsigned w = 1 + (((b1 & 0x3f) << 8) | b0);
+            unsigned h = 1 + (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6));
+            fclose(fp);
+            *out_w = (int)w;
+            *out_h = (int)h;
+            return 1;
+        }
+        fclose(fp);
+        return 0;
+    }
+
+    /* JPEG: scan SOF markers */
+    if (n >= 2 && buf[0] == 0xff && buf[1] == 0xd8) {
+        long pos = 2;
+        for (;;) {
+            unsigned char marker[4];
+            if (fseek(fp, pos, SEEK_SET) != 0) break;
+            if (fread(marker, 1, 4, fp) != 4) break;
+            if (marker[0] != 0xff) break;
+            unsigned char m = marker[1];
+            /* standalone markers without length */
+            if (m == 0xd8 || m == 0xd9) {
+                pos += 2;
+                continue;
+            }
+            if (m == 0x00 || m == 0xff) {
+                pos += 1;
+                continue;
+            }
+            unsigned seglen = img_be16(marker + 2);
+            if (seglen < 2) break;
+            /* SOF0..SOF3, SOF5..SOF7, SOF9..SOF11, SOF13..SOF15 */
+            if ((m >= 0xc0 && m <= 0xc3) || (m >= 0xc5 && m <= 0xc7) ||
+                (m >= 0xc9 && m <= 0xcb) || (m >= 0xcd && m <= 0xcf)) {
+                unsigned char sof[5];
+                if (fread(sof, 1, 5, fp) != 5) break;
+                unsigned h = img_be16(sof + 1);
+                unsigned w = img_be16(sof + 3);
+                fclose(fp);
+                if (w == 0 || h == 0) return 0;
+                *out_w = (int)w;
+                *out_h = (int)h;
+                return 1;
+            }
+            pos += 2 + (long)seglen;
+        }
+        fclose(fp);
+        return 0;
+    }
+
+    fclose(fp);
+    return 0;
+}
 
 static void ueberzugpp_start_once(void) {
     if (ueberzug_in != NULL || ueberzug_failed) return;
@@ -71,8 +219,16 @@ static void ueberzugpp_remove(void) {
     if (!ueberzug_in) return;
     fprintf(ueberzug_in, "{\"action\":\"remove\",\"identifier\":\"%s\"}\n", UEBERZUGPP_IDENTIFIER);
     fflush(ueberzug_in);
+    ueberzug_showing = 0;
+    ueberzug_last_w = 0;
+    ueberzug_last_h = 0;
 }
 
+/* Add/replace image. Clear only when needed:
+ *  - not currently showing an image (nothing to skip)
+ *  - new image smaller in width OR height than previous (ghosting)
+ *  - dimensions unknown (safe clear)
+ * Equal or larger: splash on top without remove (fast scrolling). */
 static void ueberzugpp_add(const char *img_path) {
     if (!img_path) return;
 
@@ -90,11 +246,40 @@ static void ueberzugpp_add(const char *img_path) {
 
     if (w <= 0 || h <= 0) return;
 
-    ueberzugpp_remove();
+    int iw = 0, ih = 0;
+    int got_dims = image_dimensions(img_path, &iw, &ih);
+
+    int need_clear = 0;
+    if (ueberzug_showing) {
+        if (!got_dims)
+            need_clear = 1;
+        else if (iw < ueberzug_last_w || ih < ueberzug_last_h)
+            need_clear = 1;
+    }
+
+    if (need_clear) {
+        fprintf(ueberzug_in, "{\"action\":\"remove\",\"identifier\":\"%s\"}\n", UEBERZUGPP_IDENTIFIER);
+        fflush(ueberzug_in);
+        /* keep showing=false until add succeeds; dims updated below */
+        ueberzug_showing = 0;
+        ueberzug_last_w = 0;
+        ueberzug_last_h = 0;
+    }
+
     fprintf(ueberzug_in,
             "{\"action\":\"add\",\"identifier\":\"%s\",\"path\":\"%s\",\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d}\n",
             UEBERZUGPP_IDENTIFIER, img_path, x, y, w, h);
     fflush(ueberzug_in);
+
+    ueberzug_showing = 1;
+    if (got_dims) {
+        ueberzug_last_w = iw;
+        ueberzug_last_h = ih;
+    } else {
+        /* Unknown size: force clear next time */
+        ueberzug_last_w = 0;
+        ueberzug_last_h = 0;
+    }
 }
 
 static void ueberzugpp_stop(void) {
@@ -342,26 +527,30 @@ static void getPreview(char *filepath, int maxy, int maxx) {
     char mime[128] = {0};
 
     if (stat(filepath, &st) != 0 || !S_ISREG(st.st_mode)) {
+        ueberzugpp_remove();
         preview_print_message("Preview unavailable: not a regular file", maxx);
         return;
     }
 
     if ((size_t)st.st_size > MAX_PREVIEW_BYTES) {
+        ueberzugpp_remove();
         preview_print_message("Preview unavailable: file too large", maxx);
         return;
     }
 
     if (getMIME(filepath, mime) != 0) {
+        ueberzugpp_remove();
         preview_print_message("Preview unavailable: MIME detection failed", maxx);
         return;
     }
 
     if (strncmp(mime, "image/", 6) == 0) {
+        /* Do not set clearFlagImg — that used to remove the image every next frame */
         ueberzugpp_add(filepath);
-        clearFlagImg = 1;
         return;
     }
 
+    /* Non-image preview: must clear any ueberzug layer */
     ueberzugpp_remove();
 
     /* Cache total for text/hex scrollbar (only on target change) */
@@ -393,9 +582,13 @@ static void getPreview(char *filepath, int maxy, int maxx) {
 }
 
 void PreviewNextDir(char *next_dir_arg, char **next_directories) {
+    /* Directory listing is not an image — clear ueberzug if still up */
+    ueberzugpp_remove();
+
     int rows, cols;
     getmaxyx(preview_win, rows, cols);
     int visible = rows > 0 ? rows : 1;
+    wclear(preview_win);
 
     if (preview_scroll < 0) preview_scroll = 0;
     if (preview_scroll > len_preview) preview_scroll = len_preview;

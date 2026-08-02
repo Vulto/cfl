@@ -1,3 +1,8 @@
+/* Wide-char ncurses (wget_wch) must be enabled before <ncurses.h> */
+#ifndef NCURSES_WIDECHAR
+#define NCURSES_WIDECHAR 1
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -9,6 +14,8 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <ncurses.h>
+#include <wchar.h>
+#include <wctype.h>
 #include <pwd.h>
 #include <dirent.h>
 #include <signal.h>
@@ -16,6 +23,8 @@
 #include <sys/ioctl.h>
 #include <magic.h>
 #include <time.h>
+#include <stdarg.h>
+#include <errno.h>
 
 #include "config.h"
 #include "ui.h"
@@ -70,6 +79,18 @@ int isRegularFile(const char *path);
 
 #include "bookmark.h"
 #include "preview.h"
+
+/* Forward decls needed by search.h / delete_search.h / jump_to.h (implemented below) */
+int getFiles(char *directory, char ***target);
+int compare(const void *a, const void *b);
+int getWritePermissions(char *path);
+void moveFiles(char *present_dir);
+void copyFiles(char *present_dir);
+void trashFiles(void);
+
+#include "search.h"
+#include "delete_search.h"
+#include "jump_to.h"
 
 int getFiles(char* directory, char*** target) {
 	int i = 0;
@@ -309,13 +330,23 @@ void init(int argc, char* argv[]) {
 		mkdir(cache_path, 0751);
 	}
 
-	allocSize = snprintf(NULL,0,"%s/clipboard",cache_path);
-	clipboard_path = malloc(allocSize+1);
-	if(clipboard_path == NULL) {
+	/* Remove legacy shared clipboard (pre session-local selection) */
+	{
+		char legacy_clipboard[PATH_MAX];
+		if (snprintf(legacy_clipboard, sizeof legacy_clipboard, "%s/clipboard", cache_path)
+		    < (int)sizeof legacy_clipboard) {
+			remove(legacy_clipboard);
+		}
+	}
+
+	/* Session-private clipboard: not shared across instances or restarts */
+	allocSize = snprintf(NULL, 0, "%s/clipboard.%d", cache_path, (int)getpid());
+	clipboard_path = malloc(allocSize + 1);
+	if (clipboard_path == NULL) {
 		printf("%s\n", "Couldn't initialize clipboard path");
 		exit(1);
 	}
-	snprintf(clipboard_path,allocSize+1,"%s/clipboard",cache_path);
+	snprintf(clipboard_path, allocSize + 1, "%s/clipboard.%d", cache_path, (int)getpid());
 
 	allocSize = snprintf(NULL,0,"%s/bookmarks",cache_path);
 	bookmarks_path = malloc(allocSize+1);
@@ -325,21 +356,32 @@ void init(int argc, char* argv[]) {
 	}
 	snprintf(bookmarks_path,allocSize+1,"%s/bookmarks",cache_path);
 
-	allocSize = snprintf(NULL,0,"%s/clipboard.tmp",cache_path);
-	temp_clipboard_path = malloc(allocSize+1);
-	if(temp_clipboard_path == NULL) {
+	allocSize = snprintf(NULL, 0, "%s/clipboard.%d.tmp", cache_path, (int)getpid());
+	temp_clipboard_path = malloc(allocSize + 1);
+	if (temp_clipboard_path == NULL) {
 		printf("%s\n", "Couldn't initialize temp clipboard path path");
 		exit(1);
 	}
-	snprintf(temp_clipboard_path,allocSize+1,"%s/clipboard.tmp",cache_path);
+	snprintf(temp_clipboard_path, allocSize + 1, "%s/clipboard.%d.tmp", cache_path, (int)getpid());
 
-	allocSize = snprintf(NULL,0,"%s/.local/share/trash",info->pw_dir);
-	trash_path = malloc(allocSize+1);
-	if(trash_path == NULL) {
-		printf("%s\n", "Couldn't initialize trash path");
-		exit(1);
+	/* FreeDesktop home trash: $XDG_DATA_HOME/Trash or ~/.local/share/Trash */
+	if (getenv("XDG_DATA_HOME") != NULL && getenv("XDG_DATA_HOME")[0] != '\0') {
+		allocSize = snprintf(NULL, 0, "%s/Trash", getenv("XDG_DATA_HOME"));
+		trash_path = malloc(allocSize + 1);
+		if (trash_path == NULL) {
+			printf("%s\n", "Couldn't initialize trash path");
+			exit(1);
+		}
+		snprintf(trash_path, allocSize + 1, "%s/Trash", getenv("XDG_DATA_HOME"));
+	} else {
+		allocSize = snprintf(NULL, 0, "%s/.local/share/Trash", info->pw_dir);
+		trash_path = malloc(allocSize + 1);
+		if (trash_path == NULL) {
+			printf("%s\n", "Couldn't initialize trash path");
+			exit(1);
+		}
+		snprintf(trash_path, allocSize + 1, "%s/.local/share/Trash", info->pw_dir);
 	}
-	snprintf(trash_path,allocSize+1,"%s/.local/share/trash",info->pw_dir);
 
 	char cwd[PATH_MAX];
 	if (getcwd(cwd, sizeof(cwd)) != NULL) {
@@ -365,9 +407,8 @@ void init(int argc, char* argv[]) {
 		printf("Incorrect Usage!\n");
 		exit(1);
 	}
-	if( SHOW_SELECTION_COUNT == 1 ) {
-		setSelectionCount();
-	}
+	/* Selection starts empty each session; never restore a previous list */
+	selectedFiles = 0;
 }
 
 int fileExists(char *file) {
@@ -465,14 +506,31 @@ void removeClipboard(char *filepath) {
 }
 
 void clearClipboard(void) {
-    FILE *f = fopen(clipboard_path, "w");
-    if (f == NULL) {
-        endwin();
-        printf("Couldn't open clipboard to clear!\n");
-        exit(1);
-    }
-    fclose(f);
-    selectedFiles = 0;
+	/* Remove the session clipboard file so selection is fully gone */
+	if (clipboard_path)
+		remove(clipboard_path);
+	selectedFiles = 0;
+}
+
+/* Mark every entry in the current directory listing (Shift+V). */
+void selectAllFiles(char **directories, int n) {
+	if (!directories || n <= 0)
+		return;
+	for (int i = 0; i < n; i++) {
+		if (!directories[i])
+			continue;
+		char path[PATH_MAX];
+		if (build_path(path, sizeof path, dir, directories[i]) != 0)
+			continue;
+		if (checkClipboard(path) == 1)
+			continue;
+		char *temp = strdup(path);
+		if (!temp)
+			continue;
+		writeClipboard(replace(temp, "\n", "//"));
+		free(temp);
+	}
+	setSelectionCount();
 }
 
 void getParentPath(char *path) {
@@ -497,7 +555,8 @@ void copyFiles(char *present_dir) {
 		return;
 	}
 
-	if(getWritePermissions(dir) == 1) {
+	/* Check write access on destination (not necessarily the browsed dir) */
+	if(getWritePermissions(present_dir) == 1) {
 		flag = 0;
 	} else {
 		flag = 1;
@@ -521,6 +580,7 @@ void copyFiles(char *present_dir) {
 	}
 	refresh();
 	fclose(f);
+	clearClipboard();
 }
 
 void removeFiles(void){
@@ -552,7 +612,7 @@ void removeFiles(void){
 	}
 	refresh();
 	fclose(f);
-	remove(clipboard_path);
+	clearClipboard();
 }
 
 void renameFiles(char **directories){
@@ -638,7 +698,7 @@ void renameFiles(char **directories){
 	}
 	fclose(f);
 
-	remove(clipboard_path);
+	clearClipboard();
 	remove(temp_clipboard_path);
 
 	refresh();
@@ -658,9 +718,12 @@ void moveFiles(char *present_dir) {
 	while (fgets(buf, PATH_MAX, f)) {
 		// Remove the newline character
 		buf[strlen(buf) - 1] = '\0';
+		replace(buf, "//", "\n");
 
 		// Construct the destination path
-		snprintf(dest_path, PATH_MAX, "%s/%s", present_dir, strrchr(buf, '/') + 1);
+		const char *base = strrchr(buf, '/');
+		base = base ? base + 1 : buf;
+		snprintf(dest_path, PATH_MAX, "%s/%s", present_dir, base);
 
 		// Move the file
 		if (rename(buf, dest_path) != 0) {
@@ -672,7 +735,255 @@ void moveFiles(char *present_dir) {
 
 	fclose(f);
 	refresh();
-	remove(clipboard_path);
+	clearClipboard();
+}
+
+/* ---------- FreeDesktop Trash (home trash) ---------- */
+
+static int trash_mkdir_p(const char *path, mode_t mode) {
+	char tmp[PATH_MAX];
+	if (snprintf(tmp, sizeof tmp, "%s", path) >= (int)sizeof tmp)
+		return -1;
+	size_t len = strlen(tmp);
+	if (len == 0) return -1;
+	if (tmp[len - 1] == '/')
+		tmp[len - 1] = '\0';
+
+	for (char *p = tmp + 1; *p; p++) {
+		if (*p != '/') continue;
+		*p = '\0';
+		if (mkdir(tmp, mode) != 0 && errno != EEXIST) {
+			*p = '/';
+			return -1;
+		}
+		*p = '/';
+	}
+	if (mkdir(tmp, mode) != 0 && errno != EEXIST)
+		return -1;
+	return 0;
+}
+
+/* Ensure $trash, $trash/files, $trash/info exist (0700). Returns 0 on success. */
+static int trash_ensure_home(void) {
+	if (!trash_path) return -1;
+	if (trash_mkdir_p(trash_path, 0700) != 0)
+		return -1;
+
+	char files_dir[PATH_MAX], info_dir[PATH_MAX];
+	if (snprintf(files_dir, sizeof files_dir, "%s/files", trash_path) >= (int)sizeof files_dir)
+		return -1;
+	if (snprintf(info_dir, sizeof info_dir, "%s/info", trash_path) >= (int)sizeof info_dir)
+		return -1;
+	if (mkdir(files_dir, 0700) != 0 && errno != EEXIST)
+		return -1;
+	if (mkdir(info_dir, 0700) != 0 && errno != EEXIST)
+		return -1;
+	return 0;
+}
+
+/* URL-style percent-encode for trashinfo Path= (RFC 2396 unreserved kept). */
+static int trash_url_encode(const char *in, char *out, size_t outsz) {
+	static const char *hex = "0123456789ABCDEF";
+	if (!in || !out || outsz == 0) return -1;
+	size_t o = 0;
+	for (const unsigned char *p = (const unsigned char *)in; *p; p++) {
+		int unreserved =
+			(*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+			(*p >= '0' && *p <= '9') ||
+			*p == '-' || *p == '_' || *p == '.' || *p == '~' || *p == '/';
+		if (unreserved) {
+			if (o + 1 >= outsz) return -1;
+			out[o++] = (char)*p;
+		} else {
+			if (o + 3 >= outsz) return -1;
+			out[o++] = '%';
+			out[o++] = hex[(*p >> 4) & 0xf];
+			out[o++] = hex[*p & 0xf];
+		}
+	}
+	out[o] = '\0';
+	return 0;
+}
+
+/* Pick a unique basename under trash/files and open trash/info/name.trashinfo with O_EXCL. */
+static int trash_alloc_name(const char *orig_base, char *out_name, size_t namesz,
+                            char *info_path, size_t infosz, int *info_fd) {
+	if (!orig_base || !orig_base[0])
+		orig_base = "unknown";
+
+	/* Sanitize: no slashes in trash basename */
+	char base[NAME_MAX + 1];
+	snprintf(base, sizeof base, "%s", orig_base);
+	for (char *p = base; *p; p++) {
+		if (*p == '/') *p = '_';
+	}
+
+	for (int n = 0; n < 10000; n++) {
+		if (n == 0)
+			snprintf(out_name, namesz, "%s", base);
+		else
+			snprintf(out_name, namesz, "%s.%d", base, n);
+
+		char files_path[PATH_MAX];
+		if (snprintf(files_path, sizeof files_path, "%s/files/%s", trash_path, out_name)
+		    >= (int)sizeof files_path)
+			return -1;
+		if (snprintf(info_path, infosz, "%s/info/%s.trashinfo", trash_path, out_name)
+		    >= (int)infosz)
+			return -1;
+
+		/* Atomic info create first (per spec) */
+		int fd = open(info_path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+		if (fd < 0) {
+			if (errno == EEXIST)
+				continue;
+			return -1;
+		}
+		/* Ensure files/ name is free too */
+		if (access(files_path, F_OK) == 0) {
+			close(fd);
+			unlink(info_path);
+			continue;
+		}
+		*info_fd = fd;
+		return 0;
+	}
+	return -1;
+}
+
+static int trash_write_info(int fd, const char *orig_path) {
+	char encoded[PATH_MAX * 3];
+	if (trash_url_encode(orig_path, encoded, sizeof encoded) != 0)
+		return -1;
+
+	time_t now = time(NULL);
+	struct tm *tm = localtime(&now);
+	char date[32];
+	if (!tm || strftime(date, sizeof date, "%Y-%m-%dT%H:%M:%S", tm) == 0)
+		snprintf(date, sizeof date, "1970-01-01T00:00:00");
+
+	char body[PATH_MAX * 3 + 128];
+	int n = snprintf(body, sizeof body,
+	                 "[Trash Info]\nPath=%s\nDeletionDate=%s\n",
+	                 encoded, date);
+	if (n < 0 || (size_t)n >= sizeof body)
+		return -1;
+	if (write(fd, body, (size_t)n) != (ssize_t)n)
+		return -1;
+	return 0;
+}
+
+/* Move (or copy+delete on EXDEV) src into dest path. */
+static int trash_place_file(const char *src, const char *dest) {
+	if (rename(src, dest) == 0)
+		return 0;
+	if (errno != EXDEV)
+		return -1;
+
+	/* Cross-device: copy then remove */
+	pid_t pid = fork();
+	if (pid < 0) return -1;
+	if (pid == 0) {
+		execlp("cp", "cp", "-a", src, dest, (char *)NULL);
+		_exit(127);
+	}
+	int status = 0;
+	waitpid(pid, &status, 0);
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		return -1;
+
+	pid = fork();
+	if (pid < 0) {
+		/* Leave the copy in trash rather than lose both */
+		return 0;
+	}
+	if (pid == 0) {
+		execlp("rm", "rm", "-rf", src, (char *)NULL);
+		_exit(127);
+	}
+	waitpid(pid, &status, 0);
+	return 0;
+}
+
+/* Trash one absolute path into the FreeDesktop home trash. Returns 0 on success. */
+static int trash_one(const char *orig_path) {
+	if (!orig_path || !orig_path[0])
+		return -1;
+
+	struct stat st;
+	if (lstat(orig_path, &st) != 0)
+		return -1;
+
+	const char *base = strrchr(orig_path, '/');
+	base = base ? base + 1 : orig_path;
+	if (!base[0])
+		return -1;
+
+	char trash_name[NAME_MAX + 16];
+	char info_path[PATH_MAX];
+	int info_fd = -1;
+	if (trash_alloc_name(base, trash_name, sizeof trash_name,
+	                     info_path, sizeof info_path, &info_fd) != 0)
+		return -1;
+
+	if (trash_write_info(info_fd, orig_path) != 0) {
+		close(info_fd);
+		unlink(info_path);
+		return -1;
+	}
+	close(info_fd);
+
+	char dest[PATH_MAX];
+	if (snprintf(dest, sizeof dest, "%s/files/%s", trash_path, trash_name) >= (int)sizeof dest) {
+		unlink(info_path);
+		return -1;
+	}
+
+	if (trash_place_file(orig_path, dest) != 0) {
+		unlink(info_path);
+		return -1;
+	}
+	return 0;
+}
+
+/* Move clipboard selection into FreeDesktop Trash (not a raw dump folder). */
+void trashFiles(void) {
+	FILE *f = fopen(clipboard_path, "r");
+	if (f == NULL) {
+		displayAlert("Select some files first!");
+		return;
+	}
+
+	if (trash_ensure_home() != 0) {
+		fclose(f);
+		displayAlert("Cannot create Trash directory");
+		return;
+	}
+
+	endwin();
+	int ok = 0, fail = 0;
+	char buf[PATH_MAX];
+	while (fgets(buf, PATH_MAX, f)) {
+		size_t L = strlen(buf);
+		if (L > 0 && buf[L - 1] == '\n')
+			buf[L - 1] = '\0';
+		replace(buf, "//", "\n");
+		if (trash_one(buf) == 0) {
+			printf("Trashed: %s\n", buf);
+			ok++;
+		} else {
+			perror(buf);
+			fail++;
+		}
+	}
+	fclose(f);
+	refresh();
+	clearClipboard();
+
+	if (fail && ok)
+		displayAlert("Some items failed to trash");
+	else if (fail && !ok)
+		displayAlert("Trash failed");
 }
 
 /* Full mouse handler for both scrollbars + wheel.
@@ -932,28 +1243,26 @@ void Deleting(void) {
 		keys_win = ui_modal_create(5, 40);
 		if (!keys_win) return;
 		mvwprintw(keys_win, 1, 2, "Key\tCommand");
-		mvwprintw(keys_win, 2, 2, "%c\tMove to Garbage Can", KEY_GARBAGE);
+		mvwprintw(keys_win, 2, 2, "%c\tMove to Trash", KEY_GARBAGE);
 		mvwprintw(keys_win, 3, 2, "%c\tDelete", KEY_DELETE);
 		wrefresh(keys_win);
 		secondKey = wgetch(keys_win);
 		ui_modal_destroy(keys_win);
 		keys_win = NULL;
 		if(secondKey == KEY_GARBAGE) {
-			moveFiles(trash_path);
+			trashFiles();
 		} else if( secondKey == KEY_DELETE ) {
 #if CONFIRM_ON_DEL
 			displayAlert("Confirm (y/n): ");
 			char confirm = wgetch(status_win);
 			if(confirm == 'y') {
 				removeFiles();
-				selectedFiles = 0;
 			} else {
 				displayAlert("ABORTED");
 				sleep(1);
 			}
 #else
 			removeFiles();
-			selectedFiles = 0;
 			displayAlert("File deletion success!");
 #endif
 		}
@@ -1054,19 +1363,26 @@ void help(WINDOW *main_win) {
     mvwprintw(help_win, line++, 2, " j       Next item");
     mvwprintw(help_win, line++, 2, " k       Previous item");
     mvwprintw(help_win, line++, 2, " l       Open file or Enter dir");
-    mvwprintw(help_win, line++, 2, " v       Select current items");
-    mvwprintw(help_win, line++, 2, " m       Move current items");
+    mvwprintw(help_win, line++, 2, " v       Toggle select current item");
+    mvwprintw(help_win, line++, 2, " V       Select all files in directory");
+    mvwprintw(help_win, line++, 2, " m       Move selection to current directory");
+    mvwprintw(help_win, line++, 2, " t       Move to… (pick destination directory)");
+    mvwprintw(help_win, line++, 2, " C       Copy to… (pick destination directory)");
     mvwprintw(help_win, line++, 2, " p       Paste current selected items");
     mvwprintw(help_win, line++, 2, " d       Delete current selected items");
+    mvwprintw(help_win, line++, 2, " D       Delete-search mode (Tab mark, Enter delete)");
     mvwprintw(help_win, line++, 2, " n       Create Folder");
     mvwprintw(help_win, line++, 2, " r       Rename selected items");
     mvwprintw(help_win, line++, 2, " +       Add bookmark (It will ask to bind a key to this bookmark)");
     mvwprintw(help_win, line++, 2, " - + key Remove bookmark");
     mvwprintw(help_win, line++, 2, " = + key Open bookmark ");
-    mvwprintw(help_win, line++, 2, " J/K     Scroll preview pane (text/hex/dir listings)");
+    mvwprintw(help_win, line++, 2, " /       Fuzzy search (left list + right preview)");
+    mvwprintw(help_win, line++, 2, " J       Jump to (/home /etc /usr directories)");
+    mvwprintw(help_win, line++, 2, " i       Toggle file info in preview panel");
+    mvwprintw(help_win, line++, 2, " K       Scroll preview pane up");
     mvwprintw(help_win, line++, 2, " [ / ]   Page up/down in preview pane");
     mvwprintw(help_win, line++, 2, " ?       Show this help");
-    mvwprintw(help_win, line++, 2, " q       Quit");
+    mvwprintw(help_win, line++, 2, " q       Quit (shell cd via cfl.sh wrapper)");
     // Future: use an array of {char key; const char* desc;} and loop
 
     mvwprintw(help_win, rows-2, 2, "Press any key to close");
@@ -1079,7 +1395,39 @@ void help(WINDOW *main_win) {
     ui_modal_destroy(help_win);
 }
 
+/* Write last browsed directory so a shell wrapper can cd after quit.
+ * Path: $CFL_LASTDIR if set, else $cache_path/lastdir. */
+static void save_lastdir(void) {
+	struct stat st;
+	if (dir[0] == '\0' || stat(dir, &st) != 0 || !S_ISDIR(st.st_mode))
+		return;
+
+	char pathbuf[PATH_MAX];
+	const char *out = getenv("CFL_LASTDIR");
+	if (!out || !out[0]) {
+		if (!cache_path)
+			return;
+		if (snprintf(pathbuf, sizeof pathbuf, "%s/lastdir", cache_path) >= (int)sizeof pathbuf)
+			return;
+		out = pathbuf;
+	}
+
+	FILE *f = fopen(out, "w");
+	if (!f)
+		return;
+	fprintf(f, "%s\n", dir);
+	fclose(f);
+}
+
 void WrappeUp(void) {
+	/* Leave path for shell wrapper: cd to last dir after q */
+	save_lastdir();
+
+	/* Drop session selection so nothing persists across restarts */
+	if (clipboard_path)
+		remove(clipboard_path);
+	if (temp_clipboard_path)
+		remove(temp_clipboard_path);
 	free(cache_path);
 	free(temp_clipboard_path);
 	free(clipboard_path);
@@ -1094,11 +1442,11 @@ void WrappeUp(void) {
 }
 
 /* ============================================================
- * File Info (restored/enhanced 'i' key behavior)
+ * File Info (toggle: right preview panel, not a modal window)
  * ============================================================ */
 static const char *human_size(off_t bytes, char *buf, size_t bufsz) {
     const char *units[] = {"B", "K", "M", "G", "T"};
-    double size = bytes;
+    double size = (double)bytes;
     int u = 0;
     while (size >= 1024.0 && u < 4) {
         size /= 1024.0;
@@ -1108,49 +1456,187 @@ static const char *human_size(off_t bytes, char *buf, size_t bufsz) {
     return buf;
 }
 
+static unsigned info_gcd_u(unsigned a, unsigned b) {
+    while (b) {
+        unsigned t = a % b;
+        a = b;
+        b = t;
+    }
+    return a ? a : 1;
+}
+
+static void info_format_proportion(unsigned w, unsigned h, char *buf, size_t bufsz) {
+    if (w == 0 || h == 0) {
+        snprintf(buf, bufsz, "—");
+        return;
+    }
+    unsigned g = info_gcd_u(w, h);
+    unsigned rw = w / g, rh = h / g;
+    double ratio = (double)w / (double)h;
+    snprintf(buf, bufsz, "%u:%u (%.3f)", rw, rh, ratio);
+}
+
+/* Run mediainfo with a single --Inform=template argv (required for this CLI).
+ * Template fields should be separated by '|' for easy parsing. Returns 0 on success. */
+static int info_mediainfo_inform(const char *filepath, const char *inform_eq_arg,
+                                 char *out, size_t outsz) {
+    if (!filepath || !inform_eq_arg || !out || outsz == 0)
+        return -1;
+    out[0] = '\0';
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0)
+        return -1;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
+    }
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+        /* Must be one argv: --Inform=Stream;fields — separate --Inform breaks the template */
+        execlp("mediainfo", "mediainfo", inform_eq_arg, filepath, (char *)NULL);
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+    FILE *fp = fdopen(pipefd[0], "r");
+    if (!fp) {
+        close(pipefd[0]);
+        waitpid(pid, NULL, 0);
+        return -1;
+    }
+
+    size_t got = fread(out, 1, outsz - 1, fp);
+    out[got] = '\0';
+    fclose(fp);
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0 || got == 0)
+        return -1;
+
+    while (got > 0 && (out[got - 1] == '\n' || out[got - 1] == '\r' ||
+                       out[got - 1] == ' ' || out[got - 1] == '\t'))
+        out[--got] = '\0';
+    return 0;
+}
+
+static int info_parse_u(const char *s, unsigned *v) {
+    if (!s || !*s || !v) return -1;
+    char *end = NULL;
+    unsigned long x = strtoul(s, &end, 10);
+    if (end == s) return -1;
+    *v = (unsigned)x;
+    return 0;
+}
+
+/* Split mediainfo '|' (or newline) delimited Inform output (mutates buf). */
+static int info_split_fields(char *buf, char **fields, int max_fields) {
+    int n = 0;
+    char *p = buf;
+    while (n < max_fields && p) {
+        fields[n++] = p;
+        char *sep = p;
+        while (*sep && *sep != '|' && *sep != '\n' && *sep != '\r')
+            sep++;
+        if (!*sep) break;
+        *sep = '\0';
+        p = sep + 1;
+        while (*p == '\n' || *p == '\r')
+            p++;
+        if (!*p) break;
+    }
+    return n;
+}
+
+static void info_line(WINDOW *win, int *y, int rows, int cols, const char *fmt, ...) {
+    if (!win || !y || *y >= rows) return;
+    char line[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    int safe = cols - 3;
+    if (safe < 1) safe = 1;
+    if ((int)strlen(line) > safe)
+        line[safe] = '\0';
+    mvwprintw(win, (*y)++, 2, "%s", line);
+}
+
+/* Draw file info into preview_win; stops ueberzug. Safe to call every frame. */
 void show_file_info(const char *fullpath) {
+    if (!preview_win || !fullpath) return;
+
+    ueberzugpp_remove();
+    clearFlagImg = 1;
+    preview_scroll = 0;
+    len_preview = -1;
+
+    int rows, cols;
+    getmaxyx(preview_win, rows, cols);
+    wclear(preview_win);
+
+    int y = 0;
+    wattron(preview_win, A_BOLD);
+    info_line(preview_win, &y, rows, cols, " File Info ");
+    wattroff(preview_win, A_BOLD);
+    y++;
+
     struct stat st;
-    if (stat(fullpath, &st) != 0) {
-        displayAlert("Cannot stat file");
+    /* lstat so we report symlinks correctly */
+    if (lstat(fullpath, &st) != 0) {
+        info_line(preview_win, &y, rows, cols, "Cannot stat file");
+        wrefresh(preview_win);
         return;
     }
 
-    int win_h = 12;
-    int win_w = 60;
-
-    ui_overlay_backdrop();
-    WINDOW *win = ui_modal_create(win_h, win_w);
-    if (!win) return;
-
-    mvwprintw(win, 0, 2, " File Info ");
+    const char *base = strrchr(fullpath, '/');
+    base = base ? base + 1 : fullpath;
 
     char hsize[32];
     human_size(st.st_size, hsize, sizeof hsize);
 
     char mtime_str[64];
     struct tm *tm = localtime(&st.st_mtime);
-    strftime(mtime_str, sizeof mtime_str, "%Y-%m-%d %H:%M:%S", tm);
+    if (tm)
+        strftime(mtime_str, sizeof mtime_str, "%Y-%m-%d %H:%M:%S", tm);
+    else
+        snprintf(mtime_str, sizeof mtime_str, "?");
 
-    int y = 2;
-    mvwprintw(win, y++, 2, "Name: %s", strrchr(fullpath, '/') ? strrchr(fullpath, '/') + 1 : fullpath);
-    mvwprintw(win, y++, 2, "Path: %s", fullpath);
+    info_line(preview_win, &y, rows, cols, "Name: %s", base);
+
+    if ((int)strlen(fullpath) > cols - 10 && cols > 14)
+        info_line(preview_win, &y, rows, cols, "Path: ...%s",
+                  fullpath + strlen(fullpath) - (cols - 14));
+    else
+        info_line(preview_win, &y, rows, cols, "Path: %s", fullpath);
 
     if (S_ISLNK(st.st_mode)) {
         char target[PATH_MAX];
-        if (readSymlinkTarget(fullpath, target, sizeof target) == 0) {
-            mvwprintw(win, y++, 2, "Type: Symlink → %s", target);
-        } else {
-            mvwprintw(win, y++, 2, "Type: Symlink (broken)");
-        }
+        if (readSymlinkTarget(fullpath, target, sizeof target) == 0)
+            info_line(preview_win, &y, rows, cols, "Type: Symlink → %s", target);
+        else
+            info_line(preview_win, &y, rows, cols, "Type: Symlink (broken)");
     } else if (S_ISDIR(st.st_mode)) {
-        mvwprintw(win, y++, 2, "Type: Directory");
+        info_line(preview_win, &y, rows, cols, "Type: Directory");
     } else if (S_ISREG(st.st_mode)) {
-        mvwprintw(win, y++, 2, "Type: Regular file");
+        info_line(preview_win, &y, rows, cols, "Type: Regular file");
     } else {
-        mvwprintw(win, y++, 2, "Type: Other");
+        info_line(preview_win, &y, rows, cols, "Type: Other");
     }
 
-    mvwprintw(win, y++, 2, "Size: %s (%lld bytes)", hsize, (long long)st.st_size);
+    info_line(preview_win, &y, rows, cols, "Size: %s (%lld bytes)", hsize,
+              (long long)st.st_size);
 
     char perms[11];
     perms[0] = S_ISDIR(st.st_mode) ? 'd' : (S_ISLNK(st.st_mode) ? 'l' : '-');
@@ -1164,13 +1650,126 @@ void show_file_info(const char *fullpath) {
     perms[8] = (st.st_mode & S_IWOTH) ? 'w' : '-';
     perms[9] = (st.st_mode & S_IXOTH) ? 'x' : '-';
     perms[10] = '\0';
-    mvwprintw(win, y++, 2, "Perms: %s  (0%o)", perms, st.st_mode & 07777);
+    info_line(preview_win, &y, rows, cols, "Perms: %s  (0%o)", perms, st.st_mode & 07777);
+    info_line(preview_win, &y, rows, cols, "Modified: %s", mtime_str);
 
-    mvwprintw(win, y++, 2, "Modified: %s", mtime_str);
+    {
+        struct passwd *pw = getpwuid(st.st_uid);
+        info_line(preview_win, &y, rows, cols, "Owner: %s (%u)",
+                  pw && pw->pw_name ? pw->pw_name : "?", (unsigned)st.st_uid);
+    }
 
-    mvwprintw(win, win_h - 2, 2, "Press any key to close");
-    wrefresh(win);
+    /* Media details for regular files (follow symlink to target when possible) */
+    char mime[128] = {0};
+    const char *media_path = fullpath;
+    char resolved[PATH_MAX];
 
-    wgetch(win);
-    ui_modal_destroy(win);
+    if (S_ISLNK(st.st_mode)) {
+        char target[PATH_MAX];
+        if (readSymlinkTarget(fullpath, target, sizeof target) == 0) {
+            if (target[0] == '/') {
+                snprintf(resolved, sizeof resolved, "%s", target);
+            } else {
+                char parent[PATH_MAX];
+                snprintf(parent, sizeof parent, "%s", fullpath);
+                char *slash = strrchr(parent, '/');
+                if (slash) *slash = '\0';
+                if (build_path(resolved, sizeof resolved, parent, target) != 0)
+                    resolved[0] = '\0';
+            }
+            struct stat rst;
+            if (resolved[0] && stat(resolved, &rst) == 0 && S_ISREG(rst.st_mode))
+                media_path = resolved;
+        }
+    }
+
+    int probe = 0;
+    if (S_ISREG(st.st_mode)) {
+        probe = 1;
+        media_path = fullpath;
+    } else if (S_ISLNK(st.st_mode) && media_path != fullpath) {
+        probe = 1;
+    }
+
+    if (probe && getMIME(media_path, mime) == 0) {
+        info_line(preview_win, &y, rows, cols, "MIME: %s", mime);
+
+        int is_image = (strncmp(mime, "image/", 6) == 0);
+        int is_video = (strncmp(mime, "video/", 6) == 0);
+
+        /* Containers sometimes classified under application/ */
+        if (!is_video && (strstr(mime, "mp4") || strstr(mime, "webm") ||
+                          strstr(mime, "matroska") || strstr(mime, "x-msvideo") ||
+                          strstr(mime, "quicktime") || strstr(mime, "x-matroska")))
+            is_video = 1;
+
+        if (is_image || is_video) {
+            y++;
+            wattron(preview_win, A_BOLD);
+            info_line(preview_win, &y, rows, cols, is_image ? " Image " : " Video ");
+            wattroff(preview_win, A_BOLD);
+
+            static char cache_path[PATH_MAX];
+            static char cache_blob[512];
+            static int cache_ok = 0;
+            static int cache_is_video = 0;
+
+            const char *inform = is_video
+                ? "--Inform=Video;%Width%|%Height%|%FrameRate%|%Format%|%Duration/String3%"
+                : "--Inform=Image;%Width%|%Height%";
+
+            char blob[512];
+            int ok = 0;
+            if (cache_ok && cache_is_video == is_video &&
+                strcmp(cache_path, media_path) == 0) {
+                snprintf(blob, sizeof blob, "%s", cache_blob);
+                ok = 1;
+            } else if (info_mediainfo_inform(media_path, inform, blob, sizeof blob) == 0) {
+                snprintf(cache_path, sizeof cache_path, "%s", media_path);
+                snprintf(cache_blob, sizeof cache_blob, "%s", blob);
+                cache_ok = 1;
+                cache_is_video = is_video;
+                ok = 1;
+            } else {
+                cache_ok = 0;
+            }
+
+            if (!ok) {
+                info_line(preview_win, &y, rows, cols, "Media details: unavailable (mediainfo)");
+            } else {
+                char *fields[8] = {0};
+                int nfields = info_split_fields(blob, fields, 8);
+                unsigned width = 0, height = 0;
+                if (nfields >= 1) info_parse_u(fields[0], &width);
+                if (nfields >= 2) info_parse_u(fields[1], &height);
+
+                if (width && height) {
+                    info_line(preview_win, &y, rows, cols, "Resolution: %ux%u", width, height);
+                    char prop[64];
+                    info_format_proportion(width, height, prop, sizeof prop);
+                    info_line(preview_win, &y, rows, cols, "Proportion: %s", prop);
+                } else {
+                    info_line(preview_win, &y, rows, cols, "Resolution: (unknown)");
+                }
+
+                if (is_video) {
+                    const char *fps = (nfields >= 3 && fields[2] && fields[2][0]) ? fields[2] : "—";
+                    const char *codec = (nfields >= 4 && fields[3] && fields[3][0]) ? fields[3] : "—";
+                    const char *dur = (nfields >= 5 && fields[4] && fields[4][0]) ? fields[4] : "—";
+                    info_line(preview_win, &y, rows, cols, "FPS: %s", fps);
+                    info_line(preview_win, &y, rows, cols, "Codec: %s", codec);
+                    info_line(preview_win, &y, rows, cols, "Duration: %s", dur);
+                    info_line(preview_win, &y, rows, cols, "Size: %s (%lld bytes)", hsize,
+                              (long long)st.st_size);
+                }
+            }
+        }
+    }
+
+    if (rows > 2) {
+        wattron(preview_win, A_DIM);
+        mvwprintw(preview_win, rows - 1, 2, "i = toggle file info");
+        wattroff(preview_win, A_DIM);
+    }
+    wrefresh(preview_win);
 }

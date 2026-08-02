@@ -44,6 +44,8 @@ void Link(void) {
 void Install(void) {
     CMD(PRIV_ESC, "cp", "-f", MAN, "/usr/share/man/man1");
     CMD(PRIV_ESC, "cp", "-f", BIN, PREFIX);
+    CMD(PRIV_ESC, "mkdir", "-p", "/usr/share/cfl");
+    CMD(PRIV_ESC, "cp", "-f", "cfl.sh", "/usr/share/cfl/cfl.sh");
 }
 
 void Wipe(void) {

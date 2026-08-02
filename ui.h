@@ -17,6 +17,8 @@ int len = 0;
 char dir  [PATH_MAX];
 char selected_file[NAME_MAX];
 int start = 0;
+/* When set, right pane shows file info instead of previews/images */
+int fileInfoMode = 0;
 
 // Scrollbar helper (reusable for file list right + preview right for symmetry). Implemented later in this file.
 void drawScrollbar(WINDOW *win, int total, int first_visible, bool on_left);
@@ -172,6 +174,16 @@ void cursesInit(void) {
 		use_default_colors();
 		init_pair(1, COLOR_BLACK, COLOR_WHITE);
 		init_pair(2, COLOR_WHITE, 8);
+		/* Pair 3: marked-for-delete (dark red background when 256 colors available) */
+		if (COLORS >= 256)
+			init_pair(3, COLOR_WHITE, 88);
+		else
+			init_pair(3, COLOR_WHITE, COLOR_RED);
+		/* Pair 4: multi-selected files (v / V) — dark gray background */
+		if (COLORS >= 256)
+			init_pair(4, COLOR_WHITE, 238);
+		else
+			init_pair(4, COLOR_WHITE, COLOR_BLACK);
 	}
 
 	/* Mouse for scrollbar interaction (wheel, click, drag on both bars) */
@@ -206,6 +218,11 @@ void displayStatus(void) {
 	wmove(status_win,0,1);
 	if(SHOW_SELECTION_COUNT == 1) {
 		wprintw(status_win,"[%d] ", selectedFiles);
+	}
+	if (fileInfoMode) {
+		wattron(status_win, A_BOLD);
+		wprintw(status_win, "[INFO] ");
+		wattroff(status_win, A_BOLD);
 	}
 	wprintw(status_win, "(%d/%d)", selection+1, len);
 	wprintw(status_win, " %s", dir);

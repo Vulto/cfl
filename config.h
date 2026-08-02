@@ -67,6 +67,9 @@
 // Add files to selection list
 #define KEY_SEL 'v'
 
+// Select all files in the current directory
+#define KEY_SELALL 'V'
+
 // View all the selected files
 #define KEY_VIEWSEL '\t' // TAB
 
@@ -81,6 +84,13 @@
 
 // Move files in selection list to the current directory
 #define KEY_MV 'm'
+
+// Move-to mode: pick a destination directory (like jump-to) for the selection
+#define KEY_MOVETO 't'
+
+// Copy-to mode: pick a destination directory and copy the selection there
+// (T is KEY_TOP; use C for Copy-to)
+#define KEY_COPYTO 'C'
 
 // Rename files in selection list
 #define KEY_RENAME 'r'
@@ -121,3 +131,20 @@
 #define KEY_ESCAPE 'q'
 
 #define KEY_DIR 'n'
+
+// Fuzzy search files in the current directory
+#define KEY_SEARCH '/'
+
+// Search-like mode to multi-select and permanently delete files (Tab toggles)
+#define KEY_DELETE_SEARCH 'D'
+
+// Jump-to mode: fuzzy-find directories under /home, /etc, /usr (Shift+J)
+#define KEY_JUMPTO 'J'
+
+// Directory basenames skipped by jump-to scan (exact name match, any depth)
+static const char *JUMP_OMIT_DIRS[] = {
+	".pki",
+	"usr",
+	".local",
+	NULL  /* sentinel */
+};

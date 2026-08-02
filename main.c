@@ -49,21 +49,23 @@ int main(int argc, char* argv[]) {
                 exit(1);
             }
 
-            if( i==selection ) {
+            int is_sel = (i == selection);
+            int is_marked = (checkClipboard(temp_dir) == 1);
+
+            /* Cursor: reverse bar. Marked (v/V): dark gray. Cursor wins when both. */
+            wattrset(current_win, A_NORMAL);
+            if (is_sel) {
                 if (has_colors()) wattron(current_win, A_REVERSE);
                 wattron(current_win, A_BOLD);
-            } else {
-                if (has_colors()) wattroff(current_win, A_REVERSE);
-                wattroff(current_win, A_BOLD);
+            } else if (is_marked) {
+                if (has_colors()) wattron(current_win, COLOR_PAIR(4));
+                else wattron(current_win, A_DIM);
             }
 
-            if( isRegularFile(temp_dir) == 0 ) {
-                wattron( current_win, A_BOLD );
-            } else {
-                wattroff( current_win, A_BOLD );
-            }
+            if (isRegularFile(temp_dir) == 0)
+                wattron(current_win, A_BOLD);
 
-            wmove( current_win,t,2 );
+            wmove(current_win, t, 2);
 
             /* Reserve space for right-edge scrollbar inside current_win */
             int rows, list_w;
@@ -83,22 +85,18 @@ int main(int argc, char* argv[]) {
             } else {
                 snprintf(entry_display, sizeof entry_display, "%s", directories[i]);
             }
-            /* Truncate the full visible string */
-            if ((int)strlen(entry_display) > trunc) {
+            if ((int)strlen(entry_display) > trunc)
                 entry_display[trunc] = '\0';
-            }
 
-            if( checkClipboard( temp_dir ) == 0 ) {
-                wprintw( current_win, "%s\n", entry_display );
-            } else {
-                char prefixed[PATH_MAX * 2 + 32];
-                snprintf(prefixed, sizeof prefixed, "* %s", entry_display);
-                int star_trunc = (trunc > 3 ? trunc - 2 : trunc);
-                if ((int)strlen(prefixed) > star_trunc) {
-                    prefixed[star_trunc] = '\0';
-                }
-                wprintw( current_win, "%s\n", prefixed );
+            wprintw(current_win, "%s", entry_display);
+            int printed_len = (int)strlen(entry_display);
+
+            /* Full-width bar for cursor and multi-selected rows (same width) */
+            if (is_sel || is_marked) {
+                for (int c = 2 + printed_len; c < list_w - 1; c++)
+                    mvwaddch(current_win, t, c, ' ');
             }
+            wattrset(current_win, A_NORMAL);
         }
 
         /* Hygiene: reset attrs so scrollbar (drawn later) doesn't inherit bold/reverse */
@@ -141,11 +139,20 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        if(len != 0){
-            if(len_preview > -1) {
+        if (fileInfoMode) {
+            ueberzugpp_remove();
+            if (len > 0)
+                show_file_info(next_dir);
+            else if (preview_win) {
+                wclear(preview_win);
+                mvwprintw(preview_win, 1, 2, "No file selected");
+                wrefresh(preview_win);
+            }
+        } else if (len != 0) {
+            if (len_preview > -1) {
                 PreviewNextDir(next_dir, next_directories);
             } else {
-                getPreview(next_dir, maxy, maxx/2+2);
+                getPreview(next_dir, maxy, maxx / 2 + 2);
             }
         }
 
@@ -171,7 +178,10 @@ int main(int argc, char* argv[]) {
             /* Preview pane scrolling (text, hex, directory listings) */
             case '[': previewPageUp(); break;
             case ']': previewPageDown(); break;
-            case 'J': previewScrollDown(); break;
+            case KEY_JUMPTO:
+                ueberzugpp_remove();
+                show_jump_to();
+                break;
             case 'K': previewScrollUp(); break;
             case KEY_START: goSTART(); break;
             case KEY_GOEND: goEND(); break;
@@ -181,7 +191,7 @@ int main(int argc, char* argv[]) {
             case KEY_SHELL:
                 ueberzugpp_remove(); endwin(); goShell(pid); start = 0; selection = 0; refresh(); break;
             case KEY_RENAME:
-                ueberzugpp_remove(); renameFiles(directories); selectedFiles = 0; break;
+                ueberzugpp_remove(); renameFiles(directories); break;
             case KEY_SEL: {
                 if (len <= 0) { break; }
                 if (build_path(temp_dir, sizeof temp_dir, dir, directories[selection]) != 0) {
@@ -196,28 +206,39 @@ int main(int argc, char* argv[]) {
                 scrollDown();
                 break;
             }
+            case KEY_SELALL:
+                selectAllFiles(directories, len);
+                break;
 			case '?': help(stdscr); break;
             case KEY_EMPTYSEL: clearClipboard(); setSelectionCount(); break;
             case KEY_PASTE: copyFiles(dir); break;
-            case KEY_MV: moveFiles(dir); selectedFiles = 0; break;
+            case KEY_MV: moveFiles(dir); break;
+            case KEY_MOVETO:
+                ueberzugpp_remove();
+                show_move_to();
+                break;
+            case KEY_COPYTO:
+                ueberzugpp_remove();
+                show_copy_to();
+                break;
             case KEY_REMOVEMENU: ueberzugpp_remove(); Deleting(); break;
             case KEY_VIEWSEL: endwin(); ViewSel(pid); break;
             case KEY_EDITSEL: EditSel(pid); break;
-            case KEY_INFO: {
-                if (len > 0) {
-                    if (build_path(temp_dir, sizeof temp_dir, dir, directories[selection]) != 0) {
-                        displayAlert("Path too long");
-                    } else {
-                        show_file_info(temp_dir);
-                    }
-                }
-                clearFlagImg = 1;   /* still clear any image preview */
+            case KEY_INFO:
+                fileInfoMode = !fileInfoMode;
+                if (fileInfoMode)
+                    ueberzugpp_remove();
+                clearFlagImg = 1;
                 break;
-            }
             case KEY_TOGGLEHIDE: hiddenFlag = !hiddenFlag; start = 0; selection = 0; break;
             case KEY_BOOKMARK: go_bookmark(); break;
             case KEY_ADDBOOKMARK: add_bookmark(); break;
             case KEY_RMBOOKMARK: remove_bookmark_prompt(); break;
+            case KEY_SEARCH: show_file_search(directories, len); break;
+            case KEY_DELETE_SEARCH:
+                ueberzugpp_remove();
+                show_delete_search(directories, len);
+                break;
             case KEY_DIR: CreateDir(); break;
         }
 
