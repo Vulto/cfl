@@ -1,5 +1,22 @@
 //config.h
 
+/* ============================================================
+ * UI — panel borders (recompile after changes)
+ * ============================================================ */
+
+/* Panel borders: 0 = off, 1 = sharp ACS box on file list and/or preview only.
+ * Status bar and mode line never have borders. */
+#ifndef UI_PANEL_BORDERS
+#define UI_PANEL_BORDERS 0
+#endif
+
+#ifndef UI_BORDER_FILE_LIST
+#define UI_BORDER_FILE_LIST false
+#endif
+#ifndef UI_BORDER_PREVIEW
+#define UI_BORDER_PREVIEW false
+#endif
+
 // Ueberzug++ image preview (optional; if missing, images just won't render)
 #ifndef UEBERZUGPP_BIN
 #define UEBERZUGPP_BIN "ueberzugpp"
@@ -23,8 +40,6 @@
 #define TEXT_PREVIEW_LINES 60
 #endif
 
-
-#define CONFIRM_ON_DEL false 
 
 // Set to 1 if you want to see hidden files on startup
 #define SHOW_HIDDEN false
@@ -64,60 +79,23 @@
 // Go to the bottom of the current view
 #define KEY_BOTTOM 'B'
 
-// Add files to selection list
-#define KEY_SEL 'v'
+// Tab: focus sticky preview panels (help/create)
+#define KEY_VIEWSEL '\t'
 
-// Select all files in the current directory
-#define KEY_SELALL 'V'
+// Move-to: multi-mark sources in current dir, then pick destination
+#define KEY_MOVETO 'm'
 
-// View all the selected files
-#define KEY_VIEWSEL '\t' // TAB
-
-// Edit the clippboard file
-#define KEY_EDITSEL 'e'
-
-// Empty the selection
-#define KEY_EMPTYSEL 'c'
-
-// Copy files in selection list to the current directory
-#define KEY_PASTE 'p'
-
-// Move files in selection list to the current directory
-#define KEY_MV 'm'
-
-// Move-to mode: pick a destination directory (like jump-to) for the selection
-#define KEY_MOVETO 't'
-
-// Copy-to mode: pick a destination directory and copy the selection there
-// (T is KEY_TOP; use C for Copy-to)
+// Copy-to: multi-mark sources, then pick destination (T is KEY_TOP)
 #define KEY_COPYTO 'C'
 
-// Rename files in selection list
+// Rename-to mode: filter current dir, Enter, type new basename (dual-pane)
 #define KEY_RENAME 'r'
-
-// For getting an option to either move the file to trash or delete it
-#define KEY_REMOVEMENU 'd'
-
-// For moving the file to trash after pressing KEY_REMOVEMENU
-#define KEY_GARBAGE 'g'
-
-// For removing the file after pressing KEY_REMOVEMENU
-#define KEY_DELETE 'd'
 
 // View file info
 #define KEY_INFO 'i'
 
 // Toggle Hidden Files
 #define KEY_TOGGLEHIDE '.'
-
-// Open Bookmark list
-#define KEY_BOOKMARK '='
-
-// Add Bookmark
-#define KEY_ADDBOOKMARK '+'
-
-// Remove Bookmark 
-#define KEY_RMBOOKMARK '-'
 
 #define KEY_SHELL '!'
 
@@ -127,24 +105,34 @@
 // Reload
 #define KEY_UPDATE 'u'
 
-// Quit
-#define KEY_ESCAPE 'q'
+// Quit application (not Esc — Esc returns to BROWSE mode)
+#define KEY_QUIT 'q'
+/* Legacy alias: was misnamed KEY_ESCAPE but is quit */
+#define KEY_ESCAPE KEY_QUIT
 
-#define KEY_DIR 'n'
+/* Create empty regular file in current directory */
+#define KEY_NEWFILE 'n'
 
-// Fuzzy search files in the current directory
+/* Create directory in current directory (was 'n') */
+#define KEY_DIR 'N'
+
+// Fuzzy search files in the current directory (SEARCH /:)
 #define KEY_SEARCH '/'
 
-// Search-like mode to multi-select and permanently delete files (Tab toggles)
+// Local-folder search (SEARCH s:)
+#define KEY_SEARCH_LOCAL 's'
+
+// Remove-search: filter + Tab multi-mark; confirm Enter/t=trash, d=purge (no pre-select)
 #define KEY_DELETE_SEARCH 'D'
 
-// Jump-to mode: fuzzy-find directories under /home, /etc, /usr (Shift+J)
+// Jump-to (legacy key; mcfl is always jump-first under $HOME)
 #define KEY_JUMPTO 'J'
 
-// Directory basenames skipped by jump-to scan (exact name match, any depth)
+// Basenames skipped under $HOME scan (exact name match, any depth)
 static const char *JUMP_OMIT_DIRS[] = {
 	".pki",
-	"usr",
+	".steam",
+	".cache",
 	".local",
 	NULL  /* sentinel */
 };

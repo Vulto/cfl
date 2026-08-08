@@ -10,21 +10,23 @@ cfl \- dual-pane terminal file manager (ncurses)
 
 .SH DESCRIPTION
 .B cfl
-is a terminal file manager written in C using the ncurses library. It provides
-a dual-pane interface: the left pane lists the current directory, the right
-pane shows previews (directory listing, text, hex, or images via Überzugpp)
-or file metadata when file-info mode is active.
-
-Features include multi-select, copy/move/delete, FreeDesktop trash, fuzzy
-search, bulk delete-search, jump/move/copy destination pickers, bookmarks,
-and optional shell integration to
-.B cd
-into the last browsed directory on quit.
+.RB ( mcfl
+branch) is a dual-pane
+.B mmenu
+file manager. It always starts in jump-to mode scanning
+.B $HOME
+only. There is no classic browse mode.
+.PP
+Tab multi-marks entries. Ctrl+V copies and Ctrl+X moves via
+marks → clipboard → destination picker under $HOME.
+.B q
+is always search text; quit with
+.BR Ctrl+Q .
 
 .SH OPTIONS
 .TP
 \fBdirectory\fR
-Directory to open on startup. If omitted, the current working directory is used.
+Optional path (mostly unused for jump root; scan remains $HOME).
 
 .SH KEY BINDINGS
 
@@ -69,12 +71,13 @@ omitted). Type to filter; Enter opens the directory; Esc cancels.
 Symlinks are not followed. Results prefer shorter paths.
 .TP
 \fBD\fR
-Delete-search mode: filter the current directory, Tab to mark (dark red
-background), right panel shows deletion details. Enter permanently deletes
-marked items (or the focused item if none marked). A confirmation dialog
-lists every path; y confirms. Esc cancels.
+Remove-search mode: filter the
+current directory, Tab multi-marks items (dark red), right panel shows details.
+Enter opens a sticky confirm listing every target (all marked rows, or the
+focused match). Enter/t moves to FreeDesktop Trash (default); d permanently
+deletes; n/Esc cancels.
 .TP
-\fBt\fR
+\fBm\fR
 Move-to mode: with a non-empty selection, pick a destination directory
 (same scan as jump-to) and move the selection there. Current browsing
 directory is unchanged.
@@ -82,54 +85,40 @@ directory is unchanged.
 \fBC\fR
 Copy-to mode: like move-to, but copies instead of moving.
 
-.SS Selection and file operations
-.TP
-\fBv\fR
-Toggle the current entry in the selection list. Selected rows use a dark
-gray full-width bar (same width as the cursor).
-.TP
-\fBV\fR
-Select all files in the current directory.
-.TP
-\fBc\fR
-Clear the selection.
-.TP
-\fBTab\fR
-View the selection list.
-.TP
-\fBe\fR
-Edit the selection list in
-.BR $EDITOR .
-.TP
-\fBp\fR
-Copy (paste) selection into the
-.B current
-directory.
+.SS File operations
+There is no global VISUAL multi-select.
+.B Tab
+marks items inside tools
+.RB ( m , C , D )
+or focuses sticky preview panels
+.RB ( ? , = , n ).
 .TP
 \fBm\fR
-Move selection into the
-.B current
-directory.
+Move-to: Tab multi-mark sources in the current directory, Enter, then pick a
+destination (same scan as jump-to).
+.TP
+\fBC\fR
+Copy-to: like move-to, but copies.
 .TP
 \fBr\fR
-Rename selected items (opens editor with paths).
+Rename-to mode: filter the current directory (dual-pane, like search),
+Enter to pick a file, type the new basename, Enter renames in place.
+Esc cancels.
 .TP
-\fBd\fR
-Open the remove menu.
-.TP
-\fBg\fR
-(After
-.BR d )
-Move selection to FreeDesktop Trash (see
-.BR FILES ).
-.TP
-\fBd\fR
-(After
-.BR d )
-Permanently delete selection.
+\fBD\fR
+Remove-search (see modes section): Tab multi-mark, Enter/t trash, d permanent.
 .TP
 \fBn\fR
-Create a directory.
+Create a new empty regular file in the current directory.
+Opens a sticky name prompt in the preview panel: type a name, Enter creates,
+Esc cancels.
+.TP
+\fBN\fR
+Create a new directory in the current directory (same sticky preview prompt as
+.BR n ).
+.TP
+\fB!\fR
+Open a shell in the current directory.
 
 .SS Preview and info
 .TP
@@ -154,14 +143,14 @@ a full clear for faster browsing.
 
 .SS Other
 .TP
-\fB=\fR / \fB+\fR / \fB\-\fR
-Open / add / remove bookmarks.
-.TP
 \fB!\fR
 Open a shell in the current directory.
 .TP
 \fB?\fR
-Show help.
+Toggle sticky keybindings help in the preview panel (no modal). The file list
+stays fully interactive so you can try the bindings while reading them. Tab
+moves focus to the help pane (filter/scroll); Esc on the help pane closes help
+and restores the normal preview.
 .TP
 \fBq\fR
 Quit. Writes the last browsed directory to the lastdir file (see
@@ -181,7 +170,7 @@ Default
 .BR /bin/bash .
 .TP
 .B EDITOR
-Editor for rename and selection edit. Default
+Editor environment variable. Default
 .BR nvim .
 .TP
 .B XDG_CONFIG_HOME
@@ -198,12 +187,8 @@ File path written on quit with the last directory. Default
 
 .SH FILES
 .TP
-\fB$XDG_CONFIG_HOME/cfl/bookmarks\fR
-Bookmarks as
-.BR key:path .
-.TP
 \fB$XDG_CONFIG_HOME/cfl/clipboard.<pid>\fR
-Session-local selection. Not shared across instances; removed on exit and
+Session-local transfer list. Not shared across instances; removed on exit and
 after consuming file operations.
 .TP
 \fB$XDG_CONFIG_HOME/cfl/lastdir\fR
@@ -229,8 +214,9 @@ dump folder.
 .SH CONFIGURATION
 Compile-time options live in
 .BR config.h
-(keys, opener, hidden files, trash confirm, jump omit list, Überzugpp
-settings). Rebuild after editing.
+(keys, opener, hidden files, jump omit list, Überzugpp settings, panel
+borders). Interactive UI uses sticky preview panels; short messages use the
+status line. Rebuild after editing.
 
 .SH EXAMPLES
 .TP

@@ -1,6 +1,75 @@
 #ifndef CFL_SEARCH_H
 #define CFL_SEARCH_H
 
+/* listing helpers needing sort_dir / hiddenFlag */
+int getFiles(char* directory, char*** target) {
+	int i = 0;
+	int capacity = 16;
+	DIR *pDir;
+	struct dirent *pDirent;
+	char **result;
+
+	pDir = opendir (directory);
+	if (pDir == NULL) {
+		return -1;
+	}
+
+	result = malloc((size_t)capacity * sizeof(char *));
+	if(result == NULL) {
+		closedir(pDir);
+		displayAlert("Couldn't allocate memory!");
+		exit(1);
+	}
+
+	while ((pDirent = readdir(pDir)) != NULL) {
+		if( strcmp(pDirent->d_name,".") != 0 &&
+				strcmp(pDirent->d_name,"..") != 0 ) {
+			if( pDirent->d_name[0] == '.' )
+				if( hiddenFlag == 0 )
+					continue;
+			if(i >= capacity) {
+				capacity *= 2;
+				char **grown = realloc(result, (size_t)capacity * sizeof(char *));
+				if(grown == NULL) {
+					closedir(pDir);
+					displayAlert("Couldn't allocate memory!");
+					exit(1);
+				}
+				result = grown;
+			}
+
+			result[i] = strdup(pDirent->d_name);
+			if(result[i++] == NULL) {
+				closedir(pDir);
+				displayAlert("Couldn't allocate memory!");
+				exit(1);
+			}
+		}
+	}
+
+	closedir (pDir);
+	*target = result;
+	return i;
+}
+
+int compare (const void * a, const void * b ) {
+	char temp_filepath1[PATH_MAX];
+	char temp_filepath2[PATH_MAX];
+
+	snprintf(temp_filepath1, sizeof(temp_filepath1), "%s/%s", sort_dir, *(char **)a);
+	snprintf(temp_filepath2, sizeof(temp_filepath2), "%s/%s", sort_dir, *(char **)b);
+
+	int is_dir1 = (isRegularFile(temp_filepath1) == 0);
+	int is_dir2 = (isRegularFile(temp_filepath2) == 0);
+
+	if (is_dir1 != is_dir2) {
+		return is_dir2 - is_dir1;
+	}
+	return strcasecmp(*(char **)a, *(char **)b);
+}
+
+
+
 /* Panel-based fuzzy search: left list + right preview (main cfl layout).
  * Filter algorithm matches mmenu (case-insensitive substring + refine-on-append). */
 
@@ -174,110 +243,6 @@ static void search_free_listing(char ***listing, int *n) {
     if (n) *n = 0;
 }
 
-static void search_draw_status(const char *query_mb, int sel, int matches, int total) {
-    if (!status_win) return;
-    wclear(status_win);
-    wmove(status_win, 0, 1);
-    wattron(status_win, A_BOLD);
-    wprintw(status_win, "Search > ");
-    wattroff(status_win, A_BOLD);
-    wprintw(status_win, "%s", query_mb ? query_mb : "");
-
-    int rows, cols;
-    getmaxyx(status_win, rows, cols);
-    (void)rows;
-
-    char right[64];
-    if (matches > 0)
-        snprintf(right, sizeof right, "(%d/%d)  Enter=Jump  Esc=Cancel", sel + 1, matches);
-    else
-        snprintf(right, sizeof right, "(0/%d)  Esc=Cancel", total);
-
-    int rlen = (int)strlen(right);
-    if (rlen + 2 < cols)
-        mvwprintw(status_win, 0, cols - rlen - 1, "%s", right);
-
-    /* Place cursor after query for typing feedback */
-    int qlen = query_mb ? (int)strlen(query_mb) : 0;
-    int cursor_col = 1 + (int)strlen("Search > ") + qlen;
-    if (cursor_col >= cols - rlen - 2)
-        cursor_col = cols - rlen - 3;
-    if (cursor_col < 1) cursor_col = 1;
-    wmove(status_win, 0, cursor_col);
-    curs_set(1);
-    wrefresh(status_win);
-}
-
-static void search_draw_list(char **files, search_filt *filt, int sel, int top) {
-    if (!current_win) return;
-
-    wclear(current_win);
-
-    int rows, cols;
-    getmaxyx(current_win, rows, cols);
-    int visible = rows > 0 ? rows : 1;
-    int trunc = cols - 5;
-    if (trunc < 1) trunc = 1;
-
-    if (filt->count == 0) {
-        wmove(current_win, 0, 2);
-        wprintw(current_win, "No matches.");
-    } else {
-        for (int v = 0; v < visible && top + v < filt->count; v++) {
-            int fidx = top + v;
-            int oidx = filt->indices[fidx];
-            const char *name = files[oidx] ? files[oidx] : "";
-
-            char full[PATH_MAX];
-            int path_ok = (build_path(full, sizeof full, dir, name) == 0);
-            int is_dir = path_ok && (isRegularFile(full) == 0);
-
-            if (fidx == sel) {
-                if (has_colors()) wattron(current_win, A_REVERSE);
-                wattron(current_win, A_BOLD);
-            } else {
-                if (has_colors()) wattroff(current_win, A_REVERSE);
-                wattroff(current_win, A_BOLD);
-            }
-
-            if (is_dir)
-                wattron(current_win, A_BOLD);
-            else if (fidx != sel)
-                wattroff(current_win, A_BOLD);
-
-            wmove(current_win, v, 2);
-
-            char entry_display[PATH_MAX * 2 + 32];
-            if (path_ok && isSymlink(full)) {
-                char target[PATH_MAX];
-                if (readSymlinkTarget(full, target, sizeof target) == 0)
-                    snprintf(entry_display, sizeof entry_display, "%s → %s", name, target);
-                else
-                    snprintf(entry_display, sizeof entry_display, "%s → (unreadable)", name);
-            } else {
-                snprintf(entry_display, sizeof entry_display, "%s", name);
-            }
-            if ((int)strlen(entry_display) > trunc)
-                entry_display[trunc] = '\0';
-
-            wprintw(current_win, "%s", entry_display);
-
-            /* Pad selected row so reverse fills the line */
-            if (fidx == sel) {
-                int used = (int)strlen(entry_display);
-                for (int c = 2 + used; c < cols - 1; c++)
-                    mvwaddch(current_win, v, c, ' ');
-                if (has_colors()) wattroff(current_win, A_REVERSE);
-                wattroff(current_win, A_BOLD);
-            }
-        }
-    }
-
-    wattrset(current_win, A_NORMAL);
-    drawScrollbar(current_win, filt->count > 0 ? filt->count : 1, top, false);
-    wrefresh(current_win);
-}
-
 static void search_draw_preview(char **files, search_filt *filt, int sel,
                                 char ***preview_listing, int *preview_n)
 {
@@ -335,172 +300,73 @@ static void search_draw_preview(char **files, search_filt *filt, int sel,
     }
 }
 
-/* Fuzzy-find in the current directory listing using main panels.
- * On confirm, updates global selection/start so the main list jumps to the match. */
-static void show_file_search(char **files, int n) {
-    if (!files || n <= 0) {
-        displayAlert("No files to search");
-        return;
-    }
-    if (!current_win || !preview_win || !status_win) {
-        displayAlert("UI not ready");
-        return;
-    }
 
-    wchar_t input[SEARCH_MAX_INPUT + 1] = {0};
-    int input_len = 0;
-    int prev_input_len = 0;
+static int search_count_marked(const unsigned char *marked, int n)
+{
+	int c = 0;
+	if (!marked || n <= 0) return 0;
+	for (int i = 0; i < n; i++)
+		if (marked[i]) c++;
+	return c;
+}
 
-    search_filt filt;
-    search_filt_init(&filt);
-    search_filt_fill_all(&filt, n);
-
-    int sel = 0;
-    int top = 0;
-    int done = 0;
-    int confirmed = 0;
-
-    char **preview_listing = NULL;
-    int preview_n = 0;
-    int last_preview_oidx = -1;
-
-    /* Input + caret live on status_win so the hardware cursor is not a stray
-     * square on the left list (which happens if we wget_wch(current_win)). */
-    keypad(status_win, TRUE);
-    meta(status_win, TRUE);
-    leaveok(current_win, TRUE);
-    leaveok(preview_win, TRUE);
-
-    while (!done) {
-        int rows, cols;
-        getmaxyx(current_win, rows, cols);
-        (void)cols;
-        int visible = rows > 0 ? rows : 1;
-
-        if (filt.count > 0) {
-            if (sel < 0) sel = 0;
-            if (sel >= filt.count) sel = filt.count - 1;
-            if (sel < top) top = sel;
-            else if (sel >= top + visible) top = sel - visible + 1;
-            if (top < 0) top = 0;
-            int max_top = filt.count - visible;
-            if (max_top < 0) max_top = 0;
-            if (top > max_top) top = max_top;
-        } else {
-            sel = 0;
-            top = 0;
-        }
-
-        /* Panels first, status last so the caret stays on the query line */
-        search_draw_list(files, &filt, sel, top);
-
-        int cur_oidx = (filt.count > 0) ? filt.indices[sel] : -1;
-        if (cur_oidx != last_preview_oidx) {
-            search_draw_preview(files, &filt, sel, &preview_listing, &preview_n);
-            last_preview_oidx = cur_oidx;
-        }
-
-        char *qmb = search_wc_to_mb(input);
-        search_draw_status(qmb ? qmb : "", sel, filt.count, n);
-        free(qmb);
-
-        wint_t ch;
-        int kc = wget_wch(status_win, &ch);
-        if (kc == ERR) continue;
-
-        int need_filter = 0;
-        int need_preview = 0;
-
-        if (kc == KEY_CODE_YES) {
-            if (ch == KEY_RESIZE) {
-                handleResize();
-                last_preview_oidx = -1; /* force preview redraw after layout change */
-                continue;
-            }
-            if (ch == KEY_UP && sel > 0) {
-                sel--;
-                need_preview = 1;
-            } else if (ch == KEY_DOWN && sel < filt.count - 1) {
-                sel++;
-                need_preview = 1;
-            } else if (ch == KEY_BACKSPACE || ch == KEY_DC || ch == 127 || ch == 8) {
-                if (input_len > 0) {
-                    input[--input_len] = L'\0';
-                    need_filter = 1;
-                }
-            } else if (ch == KEY_ENTER) {
-                if (filt.count > 0) {
-                    confirmed = 1;
-                    done = 1;
-                }
-            } else if (ch == KEY_PPAGE) {
-                sel -= visible;
-                if (sel < 0) sel = 0;
-                need_preview = 1;
-            } else if (ch == KEY_NPAGE) {
-                sel += visible;
-                if (sel >= filt.count) sel = filt.count > 0 ? filt.count - 1 : 0;
-                need_preview = 1;
-            }
-        } else {
-            if (ch == 27 || ch == 3 || ch == 4) {
-                done = 1;
-            } else if (ch == 'q' && input_len == 0) {
-                done = 1;
-            } else if (ch == '\n' || ch == '\r') {
-                if (filt.count > 0) {
-                    confirmed = 1;
-                    done = 1;
-                }
-            } else if (iswprint(ch) && input_len < SEARCH_MAX_INPUT) {
-                input[input_len++] = (wchar_t)ch;
-                input[input_len] = L'\0';
-                need_filter = 1;
-            }
-        }
-
-        if (need_filter) {
-            char *q = search_wc_to_mb(input);
-            int do_full = 1;
-            if (q && input_len > prev_input_len && filt.count > 0) {
-                if (search_filt_refine(&filt, files, q))
-                    do_full = 0;
-            }
-            if (do_full)
-                search_filt_apply(&filt, files, n, q);
-            free(q);
-            prev_input_len = input_len;
-            sel = 0;
-            top = 0;
-            last_preview_oidx = -1;
-        } else if (need_preview) {
-            last_preview_oidx = -1;
-        }
-    }
-
-    curs_set(0);
-    leaveok(current_win, FALSE);
-    leaveok(preview_win, FALSE);
-    search_free_listing(&preview_listing, &preview_n);
-    ueberzugpp_remove();
-    clearFlagImg = 1;
-
-    if (confirmed && filt.count > 0) {
-        int idx = filt.indices[sel];
-        if (idx >= 0 && idx < n) {
-            selection = idx;
-            if (selection < start)
-                start = selection;
-            else if (maxy > 1 && selection >= start + maxy - 1)
-                start = selection - (maxy - 2);
-            if (start < 0)
-                start = 0;
-            if (start > selection)
-                start = selection;
-        }
-    }
-
-    search_filt_free(&filt);
+/* File list with Tab multi-mark (× prefix, pair 3). Used by mcfl browse. */
+static void search_draw_marked_list(char **files, search_filt *filt, int sel, int top,
+				    const unsigned char *marked)
+{
+	if (!current_win) return;
+	wclear(current_win);
+	int rows, cols;
+	getmaxyx(current_win, rows, cols);
+	int visible = rows > 0 ? rows : 1;
+	int trunc = cols - 6;
+	if (trunc < 1) trunc = 1;
+	if (filt->count == 0) {
+		wmove(current_win, 0, 2);
+		wprintw(current_win, "No matches.");
+	} else {
+		for (int v = 0; v < visible && top + v < filt->count; v++) {
+			int fidx = top + v;
+			int oidx = filt->indices[fidx];
+			const char *name = files[oidx] ? files[oidx] : "";
+			int is_marked = marked && marked[oidx];
+			char full[PATH_MAX];
+			int path_ok = (build_path(full, sizeof full, dir, name) == 0);
+			int is_dir = path_ok && (isRegularFile(full) == 0);
+			wattrset(current_win, A_NORMAL);
+			if (is_marked && has_colors())
+				wattron(current_win, COLOR_PAIR(3));
+			if (fidx == sel) {
+				if (has_colors() && !is_marked)
+					wattron(current_win, A_REVERSE);
+				wattron(current_win, A_BOLD);
+			}
+			if (is_dir) wattron(current_win, A_BOLD);
+			wmove(current_win, v, 2);
+			char entry_display[PATH_MAX * 2 + 32];
+			const char *prefix = is_marked ? "× " : "  ";
+			if (path_ok && isSymlink(full)) {
+				char target[PATH_MAX];
+				if (readSymlinkTarget(full, target, sizeof target) == 0)
+					snprintf(entry_display, sizeof entry_display, "%s%s → %s", prefix, name, target);
+				else
+					snprintf(entry_display, sizeof entry_display, "%s%s → (unreadable)", prefix, name);
+			} else {
+				snprintf(entry_display, sizeof entry_display, "%s%s", prefix, name);
+			}
+			if ((int)strlen(entry_display) > trunc)
+				entry_display[trunc] = '\0';
+			wprintw(current_win, "%s", entry_display);
+			if (fidx == sel || is_marked) {
+				int used = (int)strlen(entry_display);
+				for (int c = 2 + used; c < cols - 1; c++)
+					mvwaddch(current_win, v, c, ' ');
+			}
+			wattrset(current_win, A_NORMAL);
+		}
+	}
+	drawScrollbar(current_win, filt->count > 0 ? filt->count : 1, top, false);
+	wrefresh(current_win);
 }
 
 #endif /* CFL_SEARCH_H */
