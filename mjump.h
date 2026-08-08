@@ -584,11 +584,16 @@ static void jump_draw_list(char **paths, search_filt *filt, int sel, int top,
     int rows, cols;
     getmaxyx(current_win, rows, cols);
     int visible = rows > 0 ? rows : 1;
-    int trunc = cols - 6;
+    /*
+     * List layout: content | 1 blank | bar | 1 blank
+     * (bar inset; trailing blank on the right of the list scrollbar).
+     * 1-col mark gutter remains in the entry string ("×" / " ").
+     */
+    int trunc = cols - 3;
     if (trunc < 1) trunc = 1;
 
     if (filt->count == 0) {
-        wmove(current_win, 0, 2);
+        wmove(current_win, 0, 0);
         wprintw(current_win, "No matches.");
     } else {
         for (int v = 0; v < visible && top + v < filt->count; v++) {
@@ -607,7 +612,7 @@ static void jump_draw_list(char **paths, search_filt *filt, int sel, int top,
             }
 
             char entry_display[PATH_MAX + 8];
-            const char *prefix = is_marked ? "× " : "  ";
+            const char *prefix = is_marked ? "×" : " ";
             snprintf(entry_display, sizeof entry_display, "%s%s", prefix, name);
             if ((int)strlen(entry_display) > trunc) {
                 int elen = (int)strlen(entry_display);
@@ -621,12 +626,12 @@ static void jump_draw_list(char **paths, search_filt *filt, int sel, int top,
                 }
             }
 
-            wmove(current_win, v, 2);
+            wmove(current_win, v, 0);
             wprintw(current_win, "%s", entry_display);
 
             if (fidx == sel || is_marked) {
                 int used = (int)strlen(entry_display);
-                for (int c = 2 + used; c < cols - 1; c++)
+                for (int c = used; c < cols - 3; c++)
                     mvwaddch(current_win, v, c, ' ');
             }
             wattrset(current_win, A_NORMAL);
@@ -635,95 +640,6 @@ static void jump_draw_list(char **paths, search_filt *filt, int sel, int top,
 
     drawScrollbar(current_win, filt->count > 0 ? filt->count : 1, top, false);
     wrefresh(current_win);
-}
-
-static void jump_draw_preview(dir_pick_mode mode, char **paths, search_filt *filt, int sel) {
-    if (!preview_win) return;
-    wclear(preview_win);
-    ueberzugpp_remove();
-    preview_scroll = 0;
-    len_preview = -1;
-
-    int rows, cols;
-    getmaxyx(preview_win, rows, cols);
-
-    int line = 0;
-    wattron(preview_win, A_BOLD);
-    mvwprintw(preview_win, line++, 2,
-              mode == DIR_PICK_MOVE ? " Move to " :
-              mode == DIR_PICK_COPY ? " Copy to " : " Jump to ");
-    wattroff(preview_win, A_BOLD);
-    line++;
-
-    if (mode == DIR_PICK_MOVE || mode == DIR_PICK_COPY) {
-        mvwprintw(preview_win, line++, 2, "%s %d selected item(s)",
-                  mode == DIR_PICK_COPY ? "Copying" : "Moving", selectedFiles);
-        line++;
-    }
-
-    if (!filt || filt->count <= 0 || sel < 0 || sel >= filt->count) {
-        mvwprintw(preview_win, line++, 2, "No directory selected");
-        wrefresh(preview_win);
-        return;
-    }
-
-    int oidx = filt->indices[sel];
-    const char *path = paths[oidx] ? paths[oidx] : "";
-
-    mvwprintw(preview_win, line++, 2,
-              (mode == DIR_PICK_MOVE || mode == DIR_PICK_COPY) ? "Destination:" : "Path:");
-    /* wrap/truncate long paths */
-    int safe = cols - 4;
-    if (safe < 8) safe = 8;
-    if ((int)strlen(path) <= safe) {
-        mvwprintw(preview_win, line++, 2, "%s", path);
-    } else {
-        mvwprintw(preview_win, line++, 2, "...%s", path + strlen(path) - (safe - 3));
-    }
-    line++;
-
-    struct stat st;
-    if (stat(path, &st) == 0) {
-        mvwprintw(preview_win, line++, 2, "Type: Directory");
-        char mtime_str[64];
-        struct tm *tm = localtime(&st.st_mtime);
-        if (tm)
-            strftime(mtime_str, sizeof mtime_str, "%Y-%m-%d %H:%M:%S", tm);
-        else
-            snprintf(mtime_str, sizeof mtime_str, "?");
-        mvwprintw(preview_win, line++, 2, "Modified: %s", mtime_str);
-    } else {
-        mvwprintw(preview_win, line++, 2, "Type: (unreadable)");
-    }
-
-    /* Quick child listing (omit errors) */
-    line++;
-    wattron(preview_win, A_BOLD);
-    mvwprintw(preview_win, line++, 2, "Contents:");
-    wattroff(preview_win, A_BOLD);
-
-    DIR *d = opendir(path);
-    if (!d) {
-        mvwprintw(preview_win, line++, 2, "(cannot list)");
-    } else {
-        int shown = 0;
-        struct dirent *ent;
-        while ((ent = readdir(d)) != NULL && line < rows - 2) {
-            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
-                continue;
-            char name[NAME_MAX + 8];
-            snprintf(name, sizeof name, "%s", ent->d_name);
-            if ((int)strlen(name) > safe)
-                name[safe] = '\0';
-            mvwprintw(preview_win, line++, 2, "%s", name);
-            shown++;
-        }
-        closedir(d);
-        if (shown == 0 && line < rows - 1)
-            mvwprintw(preview_win, line++, 2, "(empty)");
-    }
-
-    wrefresh(preview_win);
 }
 
 /* Fill session clipboard from absolute path marks (or focus). marks → clipboard. */
@@ -827,18 +743,19 @@ static int jump_scan_home(jump_list *jl)
     return 0;
 }
 
-/* Dest-only picker: clipboard already filled (marks → clipboard → dest). */
-static void show_dir_pick_dest(dir_pick_mode mode)
+/* Dest-only picker: clipboard already filled (marks → clipboard → dest).
+ * Returns 1 if move/copy ran, 0 if cancelled / failed to start. */
+static int show_dir_pick_dest(dir_pick_mode mode)
 {
     if (mode != DIR_PICK_MOVE && mode != DIR_PICK_COPY)
-        return;
+        return 0;
     if (!current_win || !preview_win || !status_win) {
         displayAlert("UI not ready");
-        return;
+        return 0;
     }
     if (access(clipboard_path, F_OK) != 0 || selectedFiles <= 0) {
         displayAlert("Nothing to transfer");
-        return;
+        return 0;
     }
 
     ueberzugpp_remove();
@@ -853,7 +770,7 @@ static void show_dir_pick_dest(dir_pick_mode mode)
     jump_list jl;
     if (jump_scan_home(&jl) != 0) {
         displayAlert("No directories under $HOME");
-        return;
+        return 0;
     }
 
     wchar_t input[JUMP_MAX_INPUT + 1] = {0};
@@ -866,6 +783,8 @@ static void show_dir_pick_dest(dir_pick_mode mode)
 
     int sel = 0, top = 0, done = 0, confirmed = 0;
     int last_preview_oidx = -2;
+    char **preview_listing = NULL;
+    int preview_n = 0;
 
     keypad(status_win, TRUE);
     meta(status_win, TRUE);
@@ -894,7 +813,7 @@ static void show_dir_pick_dest(dir_pick_mode mode)
         jump_draw_list(jl.paths, &filt, sel, top, NULL, 0);
         int cur_oidx = (filt.count > 0) ? filt.indices[sel] : -1;
         if (cur_oidx != last_preview_oidx) {
-            jump_draw_preview(mode, jl.paths, &filt, sel);
+            search_draw_preview_paths(jl.paths, &filt, sel, &preview_listing, &preview_n);
             last_preview_oidx = cur_oidx;
         }
         char *qmb = search_wc_to_mb(input);
@@ -966,6 +885,7 @@ static void show_dir_pick_dest(dir_pick_mode mode)
     ueberzugpp_remove();
     clearFlagImg = 1;
 
+    int did_transfer = 0;
     if (confirmed && filt.count > 0) {
         int oidx = filt.indices[sel];
         if (oidx >= 0 && oidx < jl.count && jl.paths[oidx]) {
@@ -975,14 +895,22 @@ static void show_dir_pick_dest(dir_pick_mode mode)
                     moveFiles(jl.paths[oidx]);
                 else
                     copyFiles(jl.paths[oidx]);
+                did_transfer = 1;
             } else {
                 displayAlert(mode == DIR_PICK_MOVE ? "Cannot move there" : "Cannot copy there");
             }
         }
     }
 
+    search_free_listing(&preview_listing, &preview_n);
     search_filt_free(&filt);
     jump_list_free(&jl);
+
+    if (did_transfer) {
+        /* move/copy used endwin(); rebuild panes before browse reloads */
+        handleResize();
+    }
+    return did_transfer;
 }
 
 enum { MCFL_OK = 0, MCFL_QUIT = 1, MCFL_BACK = 2 };
@@ -1005,8 +933,10 @@ static int mcfl_dir_browser(void)
                 return MCFL_QUIT;
             continue;
         }
-        if (n > 0)
-            qsort(files, (size_t)n, sizeof(char *), compare);
+        if (n > 0) {
+            if (snprintf(sort_dir, sizeof sort_dir, "%s", dir) < (int)sizeof sort_dir)
+                qsort(files, (size_t)n, sizeof(char *), compare);
+        }
 
         unsigned char *marked = calloc((size_t)(n > 0 ? n : 1), 1);
         if (!marked) {
@@ -1021,6 +951,8 @@ static int mcfl_dir_browser(void)
         search_filt filt;
         search_filt_init(&filt);
         search_filt_fill_all(&filt, n);
+        /* Browse display order: shorter names first (same as empty-query filter) */
+        search_filt_sort_short(&filt, files, NULL);
 
         int sel = 0, top = 0, leave = 0, result = MCFL_OK;
         int last_info = -2, last_nm = -1;
@@ -1153,11 +1085,18 @@ static int mcfl_dir_browser(void)
                         result = MCFL_OK;
                     }
                 } else if (ch == MCFL_CTRL_V || ch == MCFL_CTRL_X) {
-                    if (clipboard_from_rel_marks(files, n, marked, &filt, sel) > 0)
-                        show_dir_pick_dest(ch == MCFL_CTRL_V ? DIR_PICK_COPY : DIR_PICK_MOVE);
-                    else
+                    if (clipboard_from_rel_marks(files, n, marked, &filt, sel) > 0) {
+                        if (show_dir_pick_dest(ch == MCFL_CTRL_V ? DIR_PICK_COPY : DIR_PICK_MOVE)) {
+                            /* Rescan cwd so moved/copied-away items disappear / order resets */
+                            leave = 1;
+                            result = MCFL_OK;
+                        } else {
+                            last_info = -2;
+                        }
+                    } else {
                         displayAlert("Nothing to transfer");
-                    last_info = -2;
+                        last_info = -2;
+                    }
                 } else if (ch == '\t') {
                     if (filt.count > 0) {
                         int oidx = filt.indices[sel];
@@ -1243,6 +1182,8 @@ static int mcfl_jump_loop(void)
 
     int sel = 0, top = 0, done = 0, result = MCFL_OK;
     int last_preview_oidx = -2;
+    char **preview_listing = NULL;
+    int preview_n = 0;
 
     ueberzugpp_remove();
     keypad(status_win, TRUE);
@@ -1275,7 +1216,7 @@ static int mcfl_jump_loop(void)
         jump_draw_list(jl.paths, &filt, sel, top, marked, jl.count);
         int cur_oidx = filt.count > 0 ? filt.indices[sel] : -1;
         if (cur_oidx != last_preview_oidx) {
-            jump_draw_preview(DIR_PICK_JUMP, jl.paths, &filt, sel);
+            search_draw_preview_paths(jl.paths, &filt, sel, &preview_listing, &preview_n);
             last_preview_oidx = cur_oidx;
         }
         char *qmb = search_wc_to_mb(input);
@@ -1377,6 +1318,7 @@ static int mcfl_jump_loop(void)
     curs_set(0);
     leaveok(current_win, FALSE);
     leaveok(preview_win, FALSE);
+    search_free_listing(&preview_listing, &preview_n);
     search_filt_free(&filt);
     free(marked);
     jump_list_free(&jl);
@@ -1387,7 +1329,14 @@ static int mcfl_jump_loop(void)
 
 static void run_mcfl_session(void)
 {
-    /* Primary UI: Browse (cwd). Ctrl+J opens recursive Jump under $HOME. */
+    /* Primary UI: Browse (cwd). -j or Ctrl+J: recursive Jump under $HOME. */
+    if (start_jump_to) {
+        start_jump_to = 0;
+        int jr = mcfl_jump_loop();
+        if (jr == MCFL_QUIT)
+            return;
+        /* MCFL_OK: dir set from jump; MCFL_BACK: stay on previous dir */
+    }
     while (mcfl_dir_browser() != MCFL_QUIT)
         ;
 }

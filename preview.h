@@ -239,7 +239,8 @@ static void ueberzugpp_add(const char *img_path) {
     getbegyx(preview_win, win_y, win_x);
     getmaxyx(preview_win, win_h, win_w);
 
-    int x = win_x + 1;
+    /* content flush left; reserve pad + scrollbar on the right */
+    int x = win_x;
     int y = win_y + 1;
     int w = win_w - 2;
     int h = win_h - 2;
@@ -295,16 +296,75 @@ static void ueberzugpp_stop(void) {
     }
 }
 
+/*
+ * Global horizontal layout (left list bar + preview):
+ *   list content | 1 blank | list bar | 1 blank (sep) | preview content | 1 blank | preview bar
+ *
+ * Preview pane columns (0-based, full window) — content flush left so the
+ * only gap left of preview text is the single mid-pane sep after the list bar:
+ *   [0 .. cols-3]  content
+ *   [cols-2]       one padding column before the preview bar
+ *   [cols-1]       preview scrollbar (flush to terminal edge)
+ */
+#define PREVIEW_TEXT_X 0
+
+static int preview_safe_width(int cols) {
+	/* reserve gap(1) + bar(1) on the right */
+	int w = cols - PREVIEW_TEXT_X - 2;
+	return w < 1 ? 1 : w;
+}
+
+/* Keep the padding column empty so content never sits against the bar. */
+static void preview_blank_pad_before_bar(void) {
+	if (!preview_win) return;
+	int rows, cols;
+	getmaxyx(preview_win, rows, cols);
+	if (cols < 2) return;
+	int pad_col = cols - 2;
+	wattrset(preview_win, A_NORMAL);
+	for (int r = 0; r < rows; r++)
+		mvwaddch(preview_win, r, pad_col, ' ');
+}
+
+/* Draw scrollbar after enforcing the content|pad|bar layout. */
+static void preview_draw_scrollbar(int total, int first_visible) {
+	preview_blank_pad_before_bar();
+	drawScrollbar(preview_win, total, first_visible, false);
+}
+
+/* Print one preview line at PREVIEW_TEXT_X, clipped to safe width (stops at CR/LF). */
+static void preview_put_line(int y, const char *s) {
+	if (!preview_win || !s) return;
+	int rows, cols;
+	getmaxyx(preview_win, rows, cols);
+	(void)rows;
+	int maxw = preview_safe_width(cols);
+	char buf[4096];
+	int col = 0;
+	for (const unsigned char *p = (const unsigned char *)s;
+	     *p && *p != '\n' && *p != '\r' && col < maxw && col < (int)sizeof(buf) - 1; ) {
+		if (*p == '\t') {
+			int next = (col + 8) & ~7;
+			if (next > maxw) next = maxw;
+			while (col < next)
+				buf[col++] = ' ';
+			p++;
+		} else if (*p < 0x20) {
+			p++; /* skip other controls */
+		} else {
+			buf[col++] = (char)*p++;
+		}
+	}
+	buf[col] = '\0';
+	wmove(preview_win, y, PREVIEW_TEXT_X);
+	waddnstr(preview_win, buf, col);
+}
+
 static void preview_print_message(const char *message, int maxx) {
     (void)maxx;
-    int rows, pw;
-    getmaxyx(preview_win, rows, pw);
-    (void)rows;
-    int safe_width = pw - 3; // left pad (2) + right bar reservation
-
     wclear(preview_win);
-    wmove(preview_win, 1, 2);
-    wprintw(preview_win, "%.*s", safe_width, message);
+    preview_put_line(1, message ? message : "");
+    preview_blank_pad_before_bar();
     wrefresh(preview_win);
 }
 
@@ -350,8 +410,6 @@ static void render_text_preview(const char *path, int maxx) {
     (void)cols;
     int visible = rows > 0 ? rows : 1;
 
-    int safe_width = cols - 3; // reserve right column for scrollbar (inside preview_win)
-
     /* Enforce last-line stop: max scroll so last line sits at bottom */
     long max_scroll = (total > visible) ? (total - visible) : 0;
     if (preview_scroll < 0) preview_scroll = 0;
@@ -360,7 +418,7 @@ static void render_text_preview(const char *path, int maxx) {
     FILE *fp = fopen(path, "r");
     if (!fp) {
         preview_print_message("Preview unavailable: can't open file", maxx);
-        drawScrollbar(preview_win, (int)total, preview_scroll, false);
+        preview_draw_scrollbar((int)total, preview_scroll);
         wrefresh(preview_win);
         return;
     }
@@ -377,13 +435,11 @@ static void render_text_preview(const char *path, int maxx) {
 
     wclear(preview_win);
     int y = 1;
-    for (int i = 0; i < avail_lines && fgets(line, sizeof(line), fp); ++i) {
-        wmove(preview_win, y++, 2);
-        wprintw(preview_win, "%.*s", safe_width, line);
-    }
+    for (int i = 0; i < avail_lines && fgets(line, sizeof(line), fp); ++i)
+        preview_put_line(y++, line);
     fclose(fp);
 
-    drawScrollbar(preview_win, (int)total, preview_scroll, false);
+    preview_draw_scrollbar((int)total, preview_scroll);
     wrefresh(preview_win);
 }
 
@@ -448,8 +504,6 @@ static void render_hex_preview(const char *path, int maxx) {
     int rows, cols;
     getmaxyx(preview_win, rows, cols);
     (void)rows;
-    int safe_width = cols - 3; // reserve right column for scrollbar (layout consistency)
-    (void)safe_width;
     int visible = cols > 10 ? (cols / 4) : 1;   /* rough number of hex lines that fit */
 
     long max_scroll = (total > visible) ? (total - visible) : 0;
@@ -459,7 +513,7 @@ static void render_hex_preview(const char *path, int maxx) {
     FILE *fp = fopen(path, "rb");
     if (!fp) {
         preview_print_message("Preview unavailable: can't open file", maxx);
-        drawScrollbar(preview_win, (int)total, preview_scroll, false);
+        preview_draw_scrollbar((int)total, preview_scroll);
         wrefresh(preview_win);
         return;
     }
@@ -473,7 +527,7 @@ static void render_hex_preview(const char *path, int maxx) {
     if (fseek(fp, (long)start_offset, SEEK_SET) != 0) {
         fclose(fp);
         preview_print_message("Preview unavailable: seek error", maxx);
-        drawScrollbar(preview_win, (int)total, preview_scroll, false);
+        preview_draw_scrollbar((int)total, preview_scroll);
         wrefresh(preview_win);
         return;
     }
@@ -483,7 +537,7 @@ static void render_hex_preview(const char *path, int maxx) {
     if (!buf) {
         fclose(fp);
         preview_print_message("Preview unavailable: out of memory", maxx);
-        drawScrollbar(preview_win, (int)total, preview_scroll, false);
+        preview_draw_scrollbar((int)total, preview_scroll);
         wrefresh(preview_win);
         return;
     }
@@ -495,29 +549,36 @@ static void render_hex_preview(const char *path, int maxx) {
 
     size_t offset = start_offset;
     int y = 1;
+    int maxw = preview_safe_width(cols);
     while (offset < start_offset + n && y <= avail_lines) {
+        char linebuf[128];
         char ascii[17];
         ascii[16] = '\0';
-        wmove(preview_win, y, 2);
-        wprintw(preview_win, "%08zx  ", offset);
-        for (size_t i = 0; i < bytes_per_line; i++) {
+        int pos = snprintf(linebuf, sizeof linebuf, "%08zx  ", offset);
+        for (size_t i = 0; i < bytes_per_line && pos < (int)sizeof(linebuf) - 4; i++) {
             if (offset + i < start_offset + n) {
                 unsigned char c = buf[(offset + i) - start_offset];
-                wprintw(preview_win, "%02x ", (unsigned)c);
-                ascii[i] = (c >= 32 && c <= 126) ? c : '.';
+                pos += snprintf(linebuf + pos, sizeof(linebuf) - (size_t)pos, "%02x ", (unsigned)c);
+                ascii[i] = (c >= 32 && c <= 126) ? (char)c : '.';
             } else {
-                wprintw(preview_win, "   ");
+                pos += snprintf(linebuf + pos, sizeof(linebuf) - (size_t)pos, "   ");
                 ascii[i] = ' ';
             }
-            if (i == 7) wprintw(preview_win, " ");
+            if (i == 7 && pos < (int)sizeof(linebuf) - 2)
+                linebuf[pos++] = ' ', linebuf[pos] = '\0';
         }
-        wprintw(preview_win, " %s", ascii);
+        if (pos < (int)sizeof(linebuf) - 18)
+            snprintf(linebuf + pos, sizeof(linebuf) - (size_t)pos, " %s", ascii);
+        /* clip to content width so hex never eats the pad/bar columns */
+        if (maxw < (int)sizeof(linebuf))
+            linebuf[maxw] = '\0';
+        preview_put_line(y, linebuf);
         y++;
         offset += bytes_per_line;
     }
 
     free(buf);
-    drawScrollbar(preview_win, (int)total, preview_scroll, false);
+    preview_draw_scrollbar((int)total, preview_scroll);
     wrefresh(preview_win);
 }
 
@@ -545,6 +606,9 @@ static void getPreview(char *filepath, int maxy, int maxx) {
     }
 
     if (strncmp(mime, "image/", 6) == 0) {
+        /* Clear leftover text/hex so it does not show under the ueberzug overlay */
+        wclear(preview_win);
+        wrefresh(preview_win);
         /* Do not set clearFlagImg — that used to remove the image every next frame */
         ueberzugpp_add(filepath);
         return;
@@ -585,9 +649,18 @@ void PreviewNextDir(char *next_dir_arg, char **next_directories) {
     /* Directory listing is not an image — clear ueberzug if still up */
     ueberzugpp_remove();
 
+    if (!preview_win || !next_dir_arg || !next_directories || len_preview <= 0) {
+        if (preview_win) {
+            wclear(preview_win);
+            wrefresh(preview_win);
+        }
+        return;
+    }
+
     int rows, cols;
     getmaxyx(preview_win, rows, cols);
     int visible = rows > 0 ? rows : 1;
+    int safe_width = preview_safe_width(cols);
     wclear(preview_win);
 
     if (preview_scroll < 0) preview_scroll = 0;
@@ -595,40 +668,36 @@ void PreviewNextDir(char *next_dir_arg, char **next_directories) {
 
     int start = preview_scroll;
     for (int i = start; i < len_preview && (i - start) < visible; i++) {
-        int y = i - start + 1;
-        wmove(preview_win, y, 2);
-        snprintf(temp_dir, sizeof(temp_dir), "%s/%s", next_dir_arg, next_directories[i]);
-        if (isRegularFile(temp_dir) == 0) {
-            wattron(preview_win, A_BOLD);
-        } else {
-            wattroff(preview_win, A_BOLD);
-        }
+        int y = i - start; /* main: fill from top of pane */
+        if (build_path(temp_dir, sizeof temp_dir, next_dir_arg, next_directories[i]) != 0)
+            snprintf(temp_dir, sizeof temp_dir, "%s/%s", next_dir_arg, next_directories[i]);
 
-        /* Symlink display in right-pane directory listing */
+        if (isRegularFile(temp_dir) == 0)
+            wattron(preview_win, A_BOLD);
+        else
+            wattroff(preview_win, A_BOLD);
+
+        /* Symlink display in right-pane directory listing (main preview.h logic) */
         char entry_display[PATH_MAX * 2 + 32];
         if (isSymlink(temp_dir)) {
             char target[PATH_MAX];
-            if (readSymlinkTarget(temp_dir, target, sizeof target) == 0) {
+            if (readSymlinkTarget(temp_dir, target, sizeof target) == 0)
                 snprintf(entry_display, sizeof entry_display, "%s → %s", next_directories[i], target);
-            } else {
+            else
                 snprintf(entry_display, sizeof entry_display, "%s → (unreadable)", next_directories[i]);
-            }
         } else {
             snprintf(entry_display, sizeof entry_display, "%s", next_directories[i]);
         }
-        {
-            int rows, pw;
-            getmaxyx(preview_win, rows, pw);
-            (void)rows;
-            int safe_width = pw - 3; // reserve right column for scrollbar
-            if ((int)strlen(entry_display) > safe_width) {
-                entry_display[safe_width] = '\0';
-            }
-            wprintw(preview_win, "%s\n", entry_display);
-        }
+        if ((int)strlen(entry_display) > safe_width)
+            entry_display[safe_width] = '\0';
+
+        wmove(preview_win, y, PREVIEW_TEXT_X);
+        wprintw(preview_win, "%s", entry_display);
+        wattroff(preview_win, A_BOLD);
     }
 
     /* Right scrollbar for preview directory listing (symmetric to file list bar) */
-    drawScrollbar(preview_win, len_preview, start, false);
+    preview_draw_scrollbar(len_preview, start);
+    wrefresh(preview_win);
 }
 #endif

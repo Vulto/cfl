@@ -243,8 +243,9 @@ static void search_free_listing(char ***listing, int *n) {
     if (n) *n = 0;
 }
 
-static void search_draw_preview(char **files, search_filt *filt, int sel,
-                                char ***preview_listing, int *preview_n)
+/* Preview one absolute path via preview.h (PreviewNextDir / getPreview), same as main. */
+static void search_preview_abs(const char *path,
+                               char ***preview_listing, int *preview_n)
 {
     if (!preview_win) return;
 
@@ -253,30 +254,24 @@ static void search_draw_preview(char **files, search_filt *filt, int sel,
     preview_scroll = 0;
     len_preview = -1;
 
-    if (!filt || filt->count <= 0 || sel < 0 || sel >= filt->count) {
-        wmove(preview_win, 1, 2);
+    if (!path || !path[0]) {
+        wmove(preview_win, 0, PREVIEW_TEXT_X);
         wprintw(preview_win, "No preview");
         wrefresh(preview_win);
         ueberzugpp_remove();
         return;
     }
 
-    int oidx = filt->indices[sel];
-    char path[PATH_MAX];
-    if (build_path(path, sizeof path, dir, files[oidx]) != 0) {
-        wmove(preview_win, 1, 2);
-        wprintw(preview_win, "Path too long");
-        wrefresh(preview_win);
-        return;
-    }
+    char path_mut[PATH_MAX];
+    snprintf(path_mut, sizeof path_mut, "%s", path);
 
-    /* Directory → list contents; file → text/hex/image preview */
-    if (isRegularFile(path) == 0) {
+    /* Directory → PreviewNextDir; file → getPreview (main cfl flow) */
+    if (isRegularFile(path_mut) == 0) {
         ueberzugpp_remove();
-        int filled = getFiles(path, preview_listing);
+        int filled = getFiles(path_mut, preview_listing);
         if (filled < 0) {
             *preview_n = 0;
-            wmove(preview_win, 1, 2);
+            wmove(preview_win, 0, PREVIEW_TEXT_X);
             wprintw(preview_win, "Cannot open directory");
             wrefresh(preview_win);
             return;
@@ -286,18 +281,60 @@ static void search_draw_preview(char **files, search_filt *filt, int sel,
         if (filled > 0) {
             char saved_sort[PATH_MAX];
             snprintf(saved_sort, sizeof saved_sort, "%s", sort_dir);
-            if (snprintf(sort_dir, sizeof sort_dir, "%s", path) < (int)sizeof sort_dir)
+            if (snprintf(sort_dir, sizeof sort_dir, "%s", path_mut) < (int)sizeof sort_dir)
                 qsort(*preview_listing, (size_t)filled, sizeof(char *), compare);
             snprintf(sort_dir, sizeof sort_dir, "%s", saved_sort);
-            PreviewNextDir(path, *preview_listing);
+            /* PreviewNextDir refreshes preview_win (main used refreshWindows after) */
+            PreviewNextDir(path_mut, *preview_listing);
         } else {
-            wmove(preview_win, 1, 2);
+            wmove(preview_win, 0, PREVIEW_TEXT_X);
             wprintw(preview_win, "Empty directory");
             wrefresh(preview_win);
         }
     } else {
-        getPreview(path, maxy, maxx / 2 + 2);
+        getPreview(path_mut, maxy, maxx / 2 + 2);
     }
+}
+
+/* Browse: resolve dir + relative name, then preview. */
+static void search_draw_preview(char **files, search_filt *filt, int sel,
+                                char ***preview_listing, int *preview_n)
+{
+    if (!preview_win) return;
+
+    if (!filt || filt->count <= 0 || sel < 0 || sel >= filt->count || !files) {
+        search_preview_abs(NULL, preview_listing, preview_n);
+        return;
+    }
+
+    int oidx = filt->indices[sel];
+    char path[PATH_MAX];
+    if (build_path(path, sizeof path, dir, files[oidx]) != 0) {
+        search_free_listing(preview_listing, preview_n);
+        wclear(preview_win);
+        preview_scroll = 0;
+        len_preview = -1;
+        wmove(preview_win, 1, 0);
+        wprintw(preview_win, "Path too long");
+        wrefresh(preview_win);
+        return;
+    }
+    search_preview_abs(path, preview_listing, preview_n);
+}
+
+/* Jump / dest-pick: paths[] are absolute. */
+static void search_draw_preview_paths(char **paths, search_filt *filt, int sel,
+                                      char ***preview_listing, int *preview_n)
+{
+    if (!preview_win) return;
+
+    if (!filt || filt->count <= 0 || sel < 0 || sel >= filt->count || !paths) {
+        search_preview_abs(NULL, preview_listing, preview_n);
+        return;
+    }
+    int oidx = filt->indices[sel];
+    const char *path = paths[oidx] ? paths[oidx] : "";
+    search_preview_abs(path, preview_listing, preview_n);
 }
 
 
@@ -319,10 +356,15 @@ static void search_draw_marked_list(char **files, search_filt *filt, int sel, in
 	int rows, cols;
 	getmaxyx(current_win, rows, cols);
 	int visible = rows > 0 ? rows : 1;
-	int trunc = cols - 6;
+	/*
+	 * List layout: content | 1 blank | bar | 1 blank
+	 * (bar inset; trailing blank restored on the right of the list scrollbar).
+	 * 1-col mark gutter remains in the entry string ("×" / " ").
+	 */
+	int trunc = cols - 3;
 	if (trunc < 1) trunc = 1;
 	if (filt->count == 0) {
-		wmove(current_win, 0, 2);
+		wmove(current_win, 0, 0);
 		wprintw(current_win, "No matches.");
 	} else {
 		for (int v = 0; v < visible && top + v < filt->count; v++) {
@@ -342,9 +384,9 @@ static void search_draw_marked_list(char **files, search_filt *filt, int sel, in
 				wattron(current_win, A_BOLD);
 			}
 			if (is_dir) wattron(current_win, A_BOLD);
-			wmove(current_win, v, 2);
+			wmove(current_win, v, 0);
 			char entry_display[PATH_MAX * 2 + 32];
-			const char *prefix = is_marked ? "× " : "  ";
+			const char *prefix = is_marked ? "×" : " ";
 			if (path_ok && isSymlink(full)) {
 				char target[PATH_MAX];
 				if (readSymlinkTarget(full, target, sizeof target) == 0)
@@ -359,7 +401,8 @@ static void search_draw_marked_list(char **files, search_filt *filt, int sel, in
 			wprintw(current_win, "%s", entry_display);
 			if (fidx == sel || is_marked) {
 				int used = (int)strlen(entry_display);
-				for (int c = 2 + used; c < cols - 1; c++)
+				/* fill content only; leave blank before bar (and bar/trail for drawScrollbar) */
+				for (int c = used; c < cols - 3; c++)
 					mvwaddch(current_win, v, c, ' ');
 			}
 			wattrset(current_win, A_NORMAL);

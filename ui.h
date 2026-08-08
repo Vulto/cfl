@@ -18,6 +18,8 @@ char dir  [PATH_MAX];
 char selected_file[NAME_MAX];
 int start = 0;
 int hiddenFlag = SHOW_HIDDEN;
+/* Set by init() when argv has -j: open Jump under $HOME first */
+int start_jump_to = 0;
 
 
 /*
@@ -116,12 +118,11 @@ static void ui_clear_gaps(void) {
 		mvhline(LINES - margin, 0, ' ', COLS);
 	for (int r = 0; r < LINES; r++)
 		mvaddch(r, 0, ' ');
-	if (COLS > margin) {
-		for (int r = 0; r < LINES; r++)
-			mvaddch(r, COLS - margin, ' ');
-	}
-	for (int r = panel_top; r < panel_top + panel_h && r < LINES; r++)
-		mvaddch(r, sep_col, ' ');
+	/* No mid-pane sep strip: list window owns the blank after its bar;
+	 * preview starts at sep_col. No right-edge margin (preview bar flush). */
+	(void)panel_top;
+	(void)panel_h;
+	(void)sep_col;
 }
 
 /* ---------- Sticky preview API ---------- */
@@ -403,8 +404,10 @@ void refreshWindows(void) {
 }
 
 /* Reusable thin proportional thumb-only scrollbar.
- * Drawn inside the given window on left (col 0) or right (last col) edge.
- * Both the file-list bar and the preview bar are now placed on the right edge of their panes.
+ * on_left: bar on left edge; else on the right.
+ * File list (current_win): bar is inset by 1 so layout is
+ *   content | 1 blank | bar | 1 blank  (trailing blank is the last window col).
+ * Preview: bar flush on the last col (trailing blank 0; right edge is terminal edge).
  */
 void drawScrollbar(WINDOW *win, int total, int first_visible, bool on_left) {
 	if (!win || total <= 0) return;
@@ -416,10 +419,19 @@ void drawScrollbar(WINDOW *win, int total, int first_visible, bool on_left) {
 	ui_panel_inner(win, framed, &y0, &x0, &win_rows, &win_cols);
 	if (win_rows <= 1 || win_cols <= 2) return;
 
-	int bar_col = on_left ? x0 : (x0 + win_cols - 1);
+	/* 1-col pad to the right of the file-list bar only (not preview). */
+	int trail = (!on_left && win == current_win) ? 1 : 0;
+	if (win_cols <= 2 + trail) return;
+
+	int bar_col = on_left ? x0 : (x0 + win_cols - 1 - trail);
+
+	wattrset(win, A_NORMAL);
+	if (trail) {
+		for (int r = 0; r < win_rows; r++)
+			mvwaddch(win, y0 + r, bar_col + 1, ' ');
+	}
 
 	if (total <= win_rows) {
-		wattrset(win, A_NORMAL);
 		for (int r = 0; r < win_rows; r++)
 			mvwaddch(win, y0 + r, bar_col, ' ');
 		return;
@@ -439,7 +451,6 @@ void drawScrollbar(WINDOW *win, int total, int first_visible, bool on_left) {
 	if (thumb_start < 0) thumb_start = 0;
 	if (thumb_start + thumb_h > win_rows) thumb_start = win_rows - thumb_h;
 
-	wattrset(win, A_NORMAL);
 	for (int r = 0; r < win_rows; r++)
 		mvwaddch(win, y0 + r, bar_col, ' ');
 

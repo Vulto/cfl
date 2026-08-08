@@ -12,7 +12,7 @@ Starts in **Browse** (filterable list of the current directory).
 | **Tab** | Multi-mark |
 | **Enter** | Open directory / file |
 | **Esc** | Parent directory |
-| **Ctrl+J** | Jump — recursive dirs under **`$HOME`** (`JUMP_OMIT_DIRS`) |
+| **Ctrl+J** / **`cfl -j`** | Jump — recursive dirs under **`$HOME`** (`JUMP_OMIT_DIRS`) |
 | **Ctrl+V** | marks → clipboard → **copy-to** dest |
 | **Ctrl+X** | marks → clipboard → **move-to** dest |
 | **Ctrl+Q** | Quit |
@@ -27,6 +27,12 @@ Starts in **Browse** (filterable list of the current directory).
 ```
 
 Uses `$CC` (default `cc`), `$PREFIX` (default `/usr/local/bin`), `$SUDO` (default `sudo`).
+
+```sh
+cfl              # Browse cwd
+cfl -j           # start in Jump ($HOME recursive)
+cfl -j ~/foo     # optional path, then Jump
+```
 
 ## Layout
 

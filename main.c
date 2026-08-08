@@ -49,7 +49,7 @@ char *last = NULL;
 
 #include "preview.h"
 #include "search.h"
-#include "jump_to.h"
+#include "mjump.h"
 
 void initWindows(void) {
 	int content_left, panel_top, panel_height, sep_col;
@@ -58,7 +58,13 @@ void initWindows(void) {
 	int margin = UI_MARGIN;
 	int content_w = COLS - 2 * margin;
 	int left_w  = (content_w * 2) / 5 + 2;
-	int right_w = content_w - left_w - 1;
+	/*
+	 * List window ends with: … | blank | bar | blank (see drawScrollbar).
+	 * Preview starts on the next column (sep_col) so that trailing list blank
+	 * is the single gap before preview content — no second mid-pane gap.
+	 */
+	int right_w = COLS - sep_col;
+	if (right_w < 4) right_w = 4;
 
 	status_win = newwin(2, content_w, margin, content_left);
 
@@ -66,7 +72,7 @@ void initWindows(void) {
 	preview_start = sep_col;
 
 	current_win = newwin(panel_height, left_w,  starty, content_left);
-	preview_win = newwin(panel_height, right_w, starty, sep_col + 1);
+	preview_win = newwin(panel_height, right_w, starty, sep_col);
 
 	keypad(current_win, TRUE);
 	sigprocmask(SIG_UNBLOCK, &x, NULL);
@@ -192,24 +198,42 @@ void init(int argc, char* argv[]) {
 		snprintf(dir, sizeof(dir), "/");
 	}
 
-	if(argc == 2) {
+	start_jump_to = 0;
+	const char *path_arg = NULL;
+	for (int a = 1; a < argc; a++) {
+		const char *arg = argv[a];
+		if (!arg || !arg[0])
+			continue;
+		if (strcmp(arg, "-j") == 0) {
+			start_jump_to = 1;
+			continue;
+		}
+		if (arg[0] == '-') {
+			printf("Usage: %s [-j] [directory]\n", argv[0] ? argv[0] : "cfl");
+			printf("  -j    start in jump-to mode ($HOME recursive)\n");
+			exit(1);
+		}
+		if (path_arg) {
+			printf("Usage: %s [-j] [directory]\n", argv[0] ? argv[0] : "cfl");
+			exit(1);
+		}
+		path_arg = arg;
+	}
+
+	if (path_arg) {
 		char arg[PATH_MAX];
-		snprintf(arg, sizeof(arg), "%s", argv[1]);
-		if(arg[0] == '/') {
-			if(strlen(arg) > 1 && arg[strlen(arg)-1] == '/') {
-				arg[strlen(arg)-1] = '\0';
-			}
+		snprintf(arg, sizeof(arg), "%s", path_arg);
+		if (arg[0] == '/') {
+			if (strlen(arg) > 1 && arg[strlen(arg) - 1] == '/')
+				arg[strlen(arg) - 1] = '\0';
 			snprintf(dir, sizeof(dir), "%s", arg);
 		} else {
 			char temp[PATH_MAX];
 			snprintf(temp, sizeof(temp), "%s/%s", dir, arg);
 			snprintf(dir, sizeof(dir), "%s", temp);
 		}
-	} else if(argc > 2) {
-		printf("Incorrect Usage!\n");
-		exit(1);
 	}
-	/* Selection starts empty each session; never restore a previous list */
+
 	selectedFiles = 0;
 }
 
