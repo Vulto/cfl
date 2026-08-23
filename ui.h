@@ -55,10 +55,6 @@ search_kind search_sub = SEARCH_GLOBAL;
 void drawScrollbar(WINDOW *win, int total, int first_visible, bool on_left);
 void drawFileListScrollbar(void);
 void set_mode(cfl_mode m);
-void ui_draw_panel_border(WINDOW *win);
-void ui_panel_inner(WINDOW *win, int framed, int *y0, int *x0, int *rows, int *cols);
-int ui_win_framed(WINDOW *win);
-void displayAlert(char *message);
 void displayStatus(void);
 
 /* Sticky panel API */
@@ -238,7 +234,6 @@ void ui_sticky_end(ui_sticky_draw *d) {
 		curs_set(1);
 	else
 		curs_set(0);
-	ui_draw_panel_border(preview_win);
 	wrefresh(preview_win);
 }
 
@@ -251,10 +246,11 @@ int ui_sticky_list_rows(const ui_sticky_draw *d) {
 void cursesInit(void) {
 	initscr();
 	/*
-	 * raw: Ctrl+V/X/Q readable as bytes.
+	 * raw: Ctrl+C/X/Q readable as bytes (C=3, X=24, Q=17).
 	 * nonl: Return key stays CR (\\r); Ctrl+J stays LF (\\n) so they differ.
 	 * Without nonl, Enter often becomes \\n and collides with Ctrl+J — Enter
 	 * would never hop into the selected directory.
+	 * SIGINT ignored so Ctrl+C is copy-to, not kill.
 	 */
 	raw();
 	nonl();
@@ -268,12 +264,12 @@ void cursesInit(void) {
 		use_default_colors();
 		init_pair(1, COLOR_BLACK, COLOR_WHITE);
 		init_pair(2, COLOR_WHITE, 8);
-		/* 3: delete-search mark (dark red when 256 colors) */
+		/* 3: unused (legacy); keep soft grey if referenced */
 		if (COLORS >= 256)
-			init_pair(3, COLOR_WHITE, 88);
+			init_pair(3, COLOR_WHITE, 238);
 		else
-			init_pair(3, COLOR_WHITE, COLOR_RED);
-		/* 4: multi-mark / selected row highlight */
+			init_pair(3, COLOR_WHITE, COLOR_BLACK);
+		/* 4: multi-mark + selection highlight (dark grey) */
 		if (COLORS >= 256)
 			init_pair(4, COLOR_WHITE, 238);
 		else
@@ -283,37 +279,6 @@ void cursesInit(void) {
 	/* Mouse for scrollbar interaction (wheel, click, drag on both bars) */
 	mousemask(BUTTON1_PRESSED | BUTTON1_RELEASED | BUTTON4_PRESSED | BUTTON5_PRESSED | REPORT_MOUSE_POSITION, NULL);
 	mouseinterval(0);
-}
-
-int ui_win_framed(WINDOW *win) {
-	if (!UI_PANEL_BORDERS || !win) return 0;
-	/* Borders only for file list and preview panels */
-	if (win == current_win) return UI_BORDER_FILE_LIST ? 1 : 0;
-	if (win == preview_win) return UI_BORDER_PREVIEW ? 1 : 0;
-	return 0;
-}
-
-void ui_panel_inner(WINDOW *win, int framed, int *y0, int *x0, int *rows, int *cols) {
-	int h, w;
-	getmaxyx(win, h, w);
-	if (framed && h >= 3 && w >= 3) {
-		if (y0) *y0 = 1;
-		if (x0) *x0 = 1;
-		if (rows) *rows = h - 2;
-		if (cols) *cols = w - 2;
-	} else {
-		if (y0) *y0 = 0;
-		if (x0) *x0 = 0;
-		if (rows) *rows = h;
-		if (cols) *cols = w;
-	}
-}
-
-/* Sharp ACS border only (portable). No-op when UI_PANEL_BORDERS is 0. */
-void ui_draw_panel_border(WINDOW *win) {
-	if (!win || !UI_PANEL_BORDERS) return;
-	if (!ui_win_framed(win)) return;
-	box(win, 0, 0);
 }
 
 void handleResize(void) {
@@ -326,19 +291,6 @@ void handleResize(void) {
 
 	/* initWindows() frees and recreates all panes */
 	initWindows();
-}
-
-/* Non-blocking status-line flash (no floating windows). */
-void displayAlert(char *message) {
-	if (!message) {
-		ui_status_flash_on = 0;
-		ui_status_flash[0] = '\0';
-		return;
-	}
-	snprintf(ui_status_flash, sizeof ui_status_flash, "%s", message);
-	ui_status_flash_on = 1;
-	if (status_win)
-		displayStatus();
 }
 
 void displayStatus(void) {
@@ -414,9 +366,7 @@ void drawScrollbar(WINDOW *win, int total, int first_visible, bool on_left) {
 
 	int full_h, full_w;
 	getmaxyx(win, full_h, full_w);
-	int framed = ui_win_framed(win);
 	int y0 = 0, x0 = 0, win_rows = full_h, win_cols = full_w;
-	ui_panel_inner(win, framed, &y0, &x0, &win_rows, &win_cols);
 	if (win_rows <= 1 || win_cols <= 2) return;
 
 	/* 1-col pad to the right of the file-list bar only (not preview). */

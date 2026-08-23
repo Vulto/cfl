@@ -3,8 +3,14 @@
 
 /* mcfl:
  *  - Start in Browse mmenu of cwd; Ctrl+J = recursive Jump under $HOME
- *  - Tab multi-mark → clipboard → Ctrl+V copy / Ctrl+X move (dest under $HOME)
- *  - Enter = KEY_ENTER or CR; Ctrl+J is LF (10). q never quits; Ctrl+Q quits
+ *  - Tab multi-mark → Ctrl+C copy-to / Ctrl+X move-to (dest menu under $HOME)
+ *  - Dest menu: Enter confirms only; Esc cancels (dirs only — no file open)
+ *  - Del trash; Ctrl+R rename; Ctrl+Z undo; Ctrl+A select all; Alt+A invert
+ *  - F1 help (blocks other ops while open)
+ *  - Browse/Jump: Enter/→ open; ← parent path
+ *  - Esc: close Jump/dest; on Browse quit with lastdir (shell may cd)
+ *  - Ctrl+Q: quit immediately from any mode, no lastdir / no shell cd
+ *  - Ctrl+J is LF (10). q is filter text (does not quit)
  * JUMP_OMIT_DIRS skipped under home scan. */
 
 #define JUMP_MAX_INPUT   128
@@ -43,6 +49,208 @@ void clearClipboard(void) {
 	selectedFiles = 0;
 }
 
+/* --- op log: raw command output on preview until cursor moves --- */
+#define OP_LOG_MAX (64 * 1024)
+static char *op_log_buf = NULL;
+static int op_log_active = 0;
+
+static void op_log_clear(void)
+{
+	free(op_log_buf);
+	op_log_buf = NULL;
+	op_log_active = 0;
+}
+
+static void op_log_set(const char *text)
+{
+	op_log_clear();
+	if (!text || !text[0])
+		return;
+	size_t n = strlen(text);
+	if (n > OP_LOG_MAX)
+		n = OP_LOG_MAX;
+	op_log_buf = malloc(n + 1);
+	if (!op_log_buf)
+		return;
+	memcpy(op_log_buf, text, n);
+	op_log_buf[n] = '\0';
+	op_log_active = 1;
+}
+
+/* Draw op log into preview; return 1 if drawn. */
+static int op_log_draw(void)
+{
+	if (!op_log_active || !op_log_buf || !preview_win)
+		return 0;
+	wclear(preview_win);
+	int rows, cols;
+	getmaxyx(preview_win, rows, cols);
+	int maxw = cols > 2 ? cols - 2 : 1;
+	int y = 0;
+	const char *p = op_log_buf;
+	while (*p && y < rows) {
+		int len = 0;
+		while (p[len] && p[len] != '\n' && len < maxw)
+			len++;
+		mvwaddnstr(preview_win, y, 0, p, len);
+		y++;
+		p += len;
+		if (*p == '\n')
+			p++;
+		else if (len >= maxw) {
+			while (*p && *p != '\n')
+				p++;
+			if (*p == '\n')
+				p++;
+		}
+	}
+	wrefresh(preview_win);
+	return 1;
+}
+
+/* Forward decl — defined with trash helpers below. */
+static int trash_place_file(const char *src, const char *dest);
+
+/* --- undo (last batch only) --- */
+typedef enum {
+	UNDO_NONE = 0,
+	UNDO_TRASH,
+	UNDO_COPY,
+	UNDO_MOVE,
+	UNDO_RENAME
+} undo_kind;
+
+typedef struct {
+	undo_kind kind;
+	char src[PATH_MAX]; /* original / from */
+	char dst[PATH_MAX]; /* trash path, copy/move dest, or new rename path */
+	char extra[PATH_MAX]; /* trashinfo path for UNDO_TRASH */
+} undo_item;
+
+typedef struct {
+	undo_item *items;
+	int n;
+	int cap;
+} undo_batch;
+
+static undo_batch g_undo = {0};
+
+static void undo_clear(void)
+{
+	free(g_undo.items);
+	g_undo.items = NULL;
+	g_undo.n = 0;
+	g_undo.cap = 0;
+}
+
+static void undo_begin_batch(void)
+{
+	undo_clear();
+}
+
+static int undo_push(undo_kind kind, const char *src, const char *dst, const char *extra)
+{
+	if (g_undo.n >= g_undo.cap) {
+		int ncap = g_undo.cap ? g_undo.cap * 2 : 8;
+		undo_item *grown = realloc(g_undo.items, (size_t)ncap * sizeof(undo_item));
+		if (!grown)
+			return -1;
+		g_undo.items = grown;
+		g_undo.cap = ncap;
+	}
+	undo_item *it = &g_undo.items[g_undo.n];
+	memset(it, 0, sizeof *it);
+	it->kind = kind;
+	if (src)
+		snprintf(it->src, sizeof it->src, "%s", src);
+	if (dst)
+		snprintf(it->dst, sizeof it->dst, "%s", dst);
+	if (extra)
+		snprintf(it->extra, sizeof it->extra, "%s", extra);
+	g_undo.n++;
+	return 0;
+}
+
+static int undo_rm_rf(const char *path)
+{
+	if (!path || !path[0])
+		return -1;
+	pid_t pid = fork();
+	if (pid < 0)
+		return -1;
+	if (pid == 0) {
+		execlp("rm", "rm", "-rf", path, (char *)NULL);
+		_exit(127);
+	}
+	int status = 0;
+	waitpid(pid, &status, 0);
+	return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
+}
+
+/* Apply last batch in reverse; returns number of items undone. */
+static int undo_apply(void)
+{
+	if (g_undo.n <= 0)
+		return 0;
+	int ok = 0;
+	char logbuf[OP_LOG_MAX];
+	size_t logn = 0;
+	logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn, "undo\n");
+	endwin();
+	for (int i = g_undo.n - 1; i >= 0; i--) {
+		undo_item *it = &g_undo.items[i];
+		if (it->kind == UNDO_TRASH) {
+			/* dst = trash files path, src = original path */
+			if (trash_place_file(it->dst, it->src) == 0) {
+				if (it->extra[0])
+					unlink(it->extra);
+				printf("Restored: %s\n", it->src);
+				if (logn < sizeof logbuf - 1)
+					logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn,
+					                         "restored: %s\n", it->src);
+				ok++;
+			} else {
+				perror(it->src);
+			}
+		} else if (it->kind == UNDO_COPY) {
+			/* remove destination copy */
+			if (undo_rm_rf(it->dst) == 0) {
+				printf("Removed copy: %s\n", it->dst);
+				if (logn < sizeof logbuf - 1)
+					logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn,
+					                         "removed copy: %s\n", it->dst);
+				ok++;
+			} else {
+				perror(it->dst);
+			}
+		} else if (it->kind == UNDO_MOVE) {
+			if (rename(it->dst, it->src) == 0 || trash_place_file(it->dst, it->src) == 0) {
+				printf("Moved back: %s -> %s\n", it->dst, it->src);
+				if (logn < sizeof logbuf - 1)
+					logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn,
+					                         "moved back: %s\n", it->src);
+				ok++;
+			} else {
+				perror(it->src);
+			}
+		} else if (it->kind == UNDO_RENAME) {
+			if (rename(it->dst, it->src) == 0) {
+				printf("Renamed back: %s\n", it->src);
+				if (logn < sizeof logbuf - 1)
+					logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn,
+					                         "renamed back: %s\n", it->src);
+				ok++;
+			} else {
+				perror(it->src);
+			}
+		}
+	}
+	refresh();
+	undo_clear();
+	if (ok)
+		op_log_set(logbuf);
+	return ok;
+}
 
 /* --- copy/move (was fs_ops.h) --- */
 void copyFiles(char *present_dir) {
@@ -59,10 +267,19 @@ void copyFiles(char *present_dir) {
 	} else {
 		flag = 1;
 	}
+	undo_begin_batch();
+	char logbuf[OP_LOG_MAX];
+	size_t logn = 0;
+	logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn, "copy → %s\n", present_dir);
 	endwin();
 	while(fgets(buf, PATH_MAX, (FILE*) f)) {
 		buf[strlen(buf)-1] = '\0';
 		replace(buf,"//","\n");
+		const char *base = strrchr(buf, '/');
+		base = base ? base + 1 : buf;
+		char dest_path[PATH_MAX];
+		snprintf(dest_path, sizeof dest_path, "%s/%s", present_dir, base);
+
 		pid_t pid = fork();
 		if(pid == 0) {
 			if(flag == 0) { 
@@ -74,11 +291,21 @@ void copyFiles(char *present_dir) {
 		} else {
 			int status;
 			waitpid(pid, &status, 0);
+			if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+				undo_push(UNDO_COPY, buf, dest_path, NULL);
+				if (logn < sizeof logbuf - 1)
+					logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn,
+					                         "copied: %s\n", buf);
+			} else if (logn < sizeof logbuf - 1) {
+				logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn,
+				                         "copy failed: %s\n", buf);
+			}
 		}
 	}
 	refresh();
 	fclose(f);
 	clearClipboard();
+	op_log_set(logbuf);
 }
 void moveFiles(char *present_dir) {
 	FILE *f = fopen(clipboard_path, "r");
@@ -90,6 +317,10 @@ void moveFiles(char *present_dir) {
 		return;
 	}
 
+	undo_begin_batch();
+	char logbuf[OP_LOG_MAX];
+	size_t logn = 0;
+	logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn, "move → %s\n", present_dir);
 	endwin();
 	while (fgets(buf, PATH_MAX, f)) {
 		// Remove the newline character
@@ -104,14 +335,22 @@ void moveFiles(char *present_dir) {
 		// Move the file
 		if (rename(buf, dest_path) != 0) {
 			perror("Error moving file");
+			if (logn < sizeof logbuf - 1)
+				logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn,
+				                         "move failed: %s\n", buf);
 		} else {
 			printf("Moved: %s -> %s\n", buf, dest_path);
+			undo_push(UNDO_MOVE, buf, dest_path, NULL);
+			if (logn < sizeof logbuf - 1)
+				logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn,
+				                         "moved: %s -> %s\n", buf, dest_path);
 		}
 	}
 
 	fclose(f);
 	refresh();
 	clearClipboard();
+	op_log_set(logbuf);
 }
 
 
@@ -282,8 +521,10 @@ static int trash_place_file(const char *src, const char *dest) {
 	return 0;
 }
 
-/* Trash one absolute path into the FreeDesktop home trash. Returns 0 on success. */
-static int trash_one(const char *orig_path) {
+/* Trash one absolute path into FreeDesktop home trash.
+ * On success, optional out_dest/out_info receive trash files path and .trashinfo path. */
+static int trash_one(const char *orig_path, char *out_dest, size_t destsz,
+                     char *out_info, size_t infosz) {
 	if (!orig_path || !orig_path[0])
 		return -1;
 
@@ -320,6 +561,10 @@ static int trash_one(const char *orig_path) {
 		unlink(info_path);
 		return -1;
 	}
+	if (out_dest && destsz)
+		snprintf(out_dest, destsz, "%s", dest);
+	if (out_info && infosz)
+		snprintf(out_info, infosz, "%s", info_path);
 	return 0;
 }
 
@@ -327,49 +572,70 @@ static int trash_one(const char *orig_path) {
 void trashFiles(void) {
 	FILE *f = fopen(clipboard_path, "r");
 	if (f == NULL) {
-		displayAlert("Select some files first!");
 		return;
 	}
 
 	if (trash_ensure_home() != 0) {
 		fclose(f);
-		displayAlert("Cannot create Trash directory");
 		return;
 	}
 
+	undo_begin_batch();
 	endwin();
-	int ok = 0, fail = 0;
 	char buf[PATH_MAX];
 	while (fgets(buf, PATH_MAX, f)) {
 		size_t L = strlen(buf);
 		if (L > 0 && buf[L - 1] == '\n')
 			buf[L - 1] = '\0';
 		replace(buf, "//", "\n");
-		if (trash_one(buf) == 0) {
+		char tdest[PATH_MAX], tinfo[PATH_MAX];
+		if (trash_one(buf, tdest, sizeof tdest, tinfo, sizeof tinfo) == 0) {
 			printf("Trashed: %s\n", buf);
-			ok++;
-		} else {
+			undo_push(UNDO_TRASH, buf, tdest, tinfo);
+		} else
 			perror(buf);
-			fail++;
-		}
 	}
 	fclose(f);
 	refresh();
 	clearClipboard();
-
-	if (fail && ok)
-		displayAlert("Some items failed to trash");
-	else if (fail && !ok)
-		displayAlert("Trash failed");
 }
 
-/* Full mouse handler for both scrollbars + wheel.
- * Hit tests using actual window geometry so it survives layout changes.
- * Wheel routes by X position relative to preview_start.
- */
-
-
-/* --- openfile (was openfile.h) --- */
+/* Trash marks or hovered path; records undo. Returns count trashed. */
+static int trash_paths_batch(char **paths, int npaths)
+{
+	if (!paths || npaths <= 0)
+		return 0;
+	if (trash_ensure_home() != 0)
+		return 0;
+	undo_begin_batch();
+	char logbuf[OP_LOG_MAX];
+	size_t logn = 0;
+	logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn, "trash\n");
+	endwin();
+	int ok = 0;
+	for (int i = 0; i < npaths; i++) {
+		if (!paths[i] || !paths[i][0])
+			continue;
+		char tdest[PATH_MAX], tinfo[PATH_MAX];
+		if (trash_one(paths[i], tdest, sizeof tdest, tinfo, sizeof tinfo) == 0) {
+			printf("Trashed: %s\n", paths[i]);
+			undo_push(UNDO_TRASH, paths[i], tdest, tinfo);
+			if (logn < sizeof logbuf - 1)
+				logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn,
+				                         "trashed: %s\n", paths[i]);
+			ok++;
+		} else {
+			perror(paths[i]);
+			if (logn < sizeof logbuf - 1)
+				logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn,
+				                         "trash failed: %s\n", paths[i]);
+		}
+	}
+	refresh();
+	if (ok)
+		op_log_set(logbuf);
+	return ok;
+}
 
 void openFile(char *filepath) {
     sigprocmask(SIG_BLOCK, &x, NULL);
@@ -407,7 +673,6 @@ static void jump_list_init(jump_list *jl) {
     jl->paths = malloc((size_t)jl->cap * sizeof(char *));
     if (!jl->paths) {
         jl->cap = 0;
-        displayAlert("Couldn't allocate memory!");
     }
 }
 
@@ -515,26 +780,701 @@ static int jump_path_cmp(const void *a, const void *b) {
     return strcasecmp(sa, sb);
 }
 
-#define MCFL_CTRL_V 22  /* copy-to */
-#define MCFL_CTRL_X 24  /* move-to */
+#define MCFL_CTRL_C 3   /* copy → clipboard + Copy-to dest menu */
+#define MCFL_CTRL_X 24  /* move → clipboard + Move-to dest menu */
 #define MCFL_CTRL_Q 17  /* quit */
 #define MCFL_CTRL_J 10  /* jump-to ($HOME) = Ctrl+J = LF; Enter is KEY_ENTER or CR after nonl() */
+#define MCFL_CTRL_A 1   /* select all */
+#define MCFL_CTRL_R 18  /* rename */
+#define MCFL_CTRL_Z 26  /* undo */
+#define MCFL_CTRL_S 19  /* scripts */
 
-/* Same idea as suckless/cfl mmenu.h: KEY_BACKSPACE/KEY_DC as keycodes,
- * or ASCII BS/DEL (8/127) when raw() delivers them with kc==OK. */
+/* Synthetic key codes for CSI (st needs config.h ttysend — see README) */
+enum {
+	MCFL_K_NONE = 0,
+	MCFL_K_CTRL_SHIFT_A = 10001,
+	MCFL_K_CTRL_DOT = 10002,
+};
+
+#define MCFL_ESC_MS 50 /* wait for CSI / Alt+key after Esc */
+
+/* xterm modifyOtherKeys=2: distinct bytes for Ctrl+Shift+A, Ctrl+., etc. */
+static void mcfl_term_modkeys_on(void)
+{
+	if (isatty(STDOUT_FILENO))
+		(void)write(STDOUT_FILENO, "\033[>4;2m", 8);
+}
+
+void mcfl_term_modkeys_off(void)
+{
+	if (isatty(STDOUT_FILENO))
+		(void)write(STDOUT_FILENO, "\033[>4;0m", 8);
+}
+
+/* Backspace only — KEY_DC (Delete) is trash, not filter edit. */
 static int mcfl_is_backspace(int kc, wint_t ch)
 {
 	if (kc == KEY_CODE_YES)
-		return (ch == KEY_BACKSPACE || ch == KEY_DC || ch == 127 || ch == 8);
+		return (ch == KEY_BACKSPACE || ch == 127 || ch == 8);
 	return (ch == 8 || ch == 127 || ch == KEY_BACKSPACE);
 }
 
-/* Confirm / hop: never treat LF as Enter (that is Ctrl+J). */
+static int mcfl_is_delete_key(int kc, wint_t ch)
+{
+	return kc == KEY_CODE_YES && ch == KEY_DC;
+}
+
+/*
+ * Enter / open:
+ *  - KEY_ENTER and → (Browse)
+ *  - bare CR (\r): kept for st — Enter and Ctrl+M are the same byte on st
+ *    (cannot deaden Ctrl+M without breaking Enter). See README.
+ *  - never LF (Ctrl+J).
+ */
 static int mcfl_is_enter(int kc, wint_t ch)
 {
 	if (kc == KEY_CODE_YES)
-		return (ch == KEY_ENTER);
-	return (ch == '\r' || ch == KEY_ENTER);
+		return (ch == KEY_ENTER || ch == KEY_RIGHT);
+	return (ch == '\r');
+}
+
+/* Dest menu confirm only — no KEY_RIGHT. */
+static int mcfl_is_enter_only(int kc, wint_t ch)
+{
+	if (kc == KEY_CODE_YES)
+		return ch == KEY_ENTER;
+	return ch == '\r';
+}
+
+static int mcfl_is_escape(int kc, wint_t ch)
+{
+	(void)kc;
+	return ch == 27;
+}
+
+static int mcfl_is_key_left(int kc, wint_t ch)
+{
+	return kc == KEY_CODE_YES && ch == KEY_LEFT;
+}
+
+/*
+ * Read one logical key from win. Parses xterm-style CSI used when st is
+ * configured to ttysend them (stock st folds Ctrl+Shift+A → Ctrl+A).
+ *
+ * Recognized:
+ *   ESC [ 27 ; 6 ; 65 ~  or  97 ~  → Ctrl+Shift+A (xterm / modifyOtherKeys)
+ *   ESC [ 27 ; 3 ; 65 ~  or  97 ~  → Alt+A invert (xterm)
+ *   ESC [ 27 ; 5 ; 46 ~            → Ctrl+.
+ *   ESC [ 65 ; 5 u                 → kitty Ctrl+Shift+A (mod 5 = shift+ctrl)
+ *   ESC [ 97 ; 2 u                 → kitty Alt+A (mod 2 = alt)
+ *   Esc a / Esc A (no modifyOtherKeys) → Alt+A invert
+ * Bare ESC (no following byte within MCFL_ESC_MS) → ch=27.
+ *
+ * out_syn: MCFL_K_* if synthetic; else 0. out_kc and out_ch are normal keys.
+ */
+static int mcfl_read_key(WINDOW *win, int *out_kc, wint_t *out_ch, int *out_syn)
+{
+	*out_syn = MCFL_K_NONE;
+	int kc = wget_wch(win, out_ch);
+	*out_kc = kc;
+	if (kc == ERR)
+		return ERR;
+	if (kc == KEY_CODE_YES || *out_ch != 27)
+		return kc;
+
+	/* ESC — wait briefly for CSI or Alt+key (not nodelay: avoids CSI race) */
+	wtimeout(win, MCFL_ESC_MS);
+	wint_t ch2 = 0;
+	int kc2 = wget_wch(win, &ch2);
+	if (kc2 == ERR) {
+		wtimeout(win, -1);
+		return kc; /* bare Esc */
+	}
+	if (kc2 == KEY_CODE_YES) {
+		wtimeout(win, -1);
+		return kc;
+	}
+	if (ch2 == L'a' || ch2 == L'A') {
+		wtimeout(win, -1);
+		*out_syn = MCFL_K_CTRL_SHIFT_A; /* Alt+A invert */
+		return OK;
+	}
+	if (ch2 != L'[') {
+		wtimeout(win, -1);
+		return kc; /* Esc + unknown follower — treat as Esc */
+	}
+
+	/* Read CSI parameters until terminator (same short timeout per byte) */
+	char csi[64];
+	int n = 0;
+	for (;;) {
+		wint_t c = 0;
+		int k = wget_wch(win, &c);
+		if (k == ERR)
+			break;
+		if (k == KEY_CODE_YES)
+			break;
+		if (n < (int)sizeof(csi) - 1)
+			csi[n++] = (char)c;
+		if (c >= 0x40 && c <= 0x7E)
+			break;
+	}
+	csi[n] = '\0';
+	wtimeout(win, -1);
+
+	/* ESC [ 27 ; <mod> ; <key> ~  (xterm modifyOtherKeys / st ttysend) */
+	int p1 = 0, p2 = 0, p3 = 0;
+	if (sscanf(csi, "%d;%d;%d~", &p1, &p2, &p3) == 3 && p1 == 27) {
+		/* xterm mod: 3=Alt, 5=Ctrl, 6=Ctrl+Shift */
+		if ((p2 == 6 || p2 == 3) && (p3 == 65 || p3 == 97)) {
+			*out_syn = MCFL_K_CTRL_SHIFT_A;
+			return OK;
+		}
+		if (p2 == 5 && p3 == 46) {
+			*out_syn = MCFL_K_CTRL_DOT;
+			return OK;
+		}
+	}
+	/* kitty: ESC [ <key> ; <mod> u  (mod: 2=alt, 4=ctrl, 5=ctrl+shift) */
+	if (sscanf(csi, "%d;%du", &p1, &p2) == 2) {
+		if ((p2 == 5 || p2 == 2) && (p1 == 65 || p1 == 97)) {
+			*out_syn = MCFL_K_CTRL_SHIFT_A;
+			return OK;
+		}
+		if (p2 == 4 && p1 == 46) {
+			*out_syn = MCFL_K_CTRL_DOT;
+			return OK;
+		}
+	}
+
+	/* Unrecognized CSI after ESC — treat as Esc */
+	*out_ch = 27;
+	*out_kc = OK;
+	return OK;
+}
+
+/* Ctrl+Q: exit without shell cd-on-quit (see cfl_cd_on_quit / WrappeUp). */
+static void mcfl_quit_fast(void)
+{
+	cfl_cd_on_quit = 0;
+}
+
+static void marks_select_all(unsigned char *marked, int n)
+{
+	if (!marked || n <= 0)
+		return;
+	for (int i = 0; i < n; i++)
+		marked[i] = 1;
+}
+
+static void marks_invert(unsigned char *marked, int n)
+{
+	if (!marked || n <= 0)
+		return;
+	for (int i = 0; i < n; i++)
+		marked[i] = marked[i] ? 0 : 1;
+}
+
+/* Collect abs paths from marks or focus. Caller frees each string and the array.
+ * If base_dir is non-NULL, paths[i] are basenames joined with base_dir.
+ * If base_dir is NULL, paths[i] are already absolute. */
+static int collect_paths(char **paths, int n, const unsigned char *marked,
+                         search_filt *filt, int sel, const char *base_dir,
+                         char ***out_paths)
+{
+	if (!out_paths)
+		return 0;
+	*out_paths = NULL;
+	int any = search_count_marked(marked, n) > 0;
+	char **list = NULL;
+	int count = 0, cap = 0;
+
+	if (any) {
+		for (int i = 0; i < n; i++) {
+			if (!marked[i] || !paths[i])
+				continue;
+			if (base_dir && (strcmp(paths[i], ".") == 0 || strcmp(paths[i], "..") == 0))
+				continue;
+			char path[PATH_MAX];
+			if (base_dir) {
+				if (build_path(path, sizeof path, base_dir, paths[i]) != 0)
+					continue;
+			} else {
+				snprintf(path, sizeof path, "%s", paths[i]);
+			}
+			if (count >= cap) {
+				int ncap = cap ? cap * 2 : 8;
+				char **g = realloc(list, (size_t)ncap * sizeof(char *));
+				if (!g)
+					break;
+				list = g;
+				cap = ncap;
+			}
+			list[count] = strdup(path);
+			if (list[count])
+				count++;
+		}
+	} else if (filt && filt->count > 0 && sel >= 0 && sel < filt->count) {
+		int oidx = filt->indices[sel];
+		if (oidx >= 0 && oidx < n && paths[oidx]) {
+			if (base_dir && (strcmp(paths[oidx], ".") == 0 || strcmp(paths[oidx], "..") == 0))
+				goto done;
+			char path[PATH_MAX];
+			if (base_dir) {
+				if (build_path(path, sizeof path, base_dir, paths[oidx]) != 0)
+					goto done;
+			} else {
+				snprintf(path, sizeof path, "%s", paths[oidx]);
+			}
+			list = malloc(sizeof(char *));
+			if (list) {
+				list[0] = strdup(path);
+				if (list[0])
+					count = 1;
+			}
+		}
+	}
+done:
+	*out_paths = list;
+	return count;
+}
+
+static void free_path_list(char **paths, int n)
+{
+	if (!paths)
+		return;
+	for (int i = 0; i < n; i++)
+		free(paths[i]);
+	free(paths);
+}
+
+/* Status-line rename of hovered basename. Returns 1 if renamed. */
+static int browse_rename_hover(char **files, int n, search_filt *filt, int sel)
+{
+	if (!filt || filt->count <= 0 || sel < 0 || sel >= filt->count)
+		return 0;
+	int oidx = filt->indices[sel];
+	if (oidx < 0 || oidx >= n || !files[oidx])
+		return 0;
+	if (strcmp(files[oidx], ".") == 0 || strcmp(files[oidx], "..") == 0)
+		return 0;
+
+	char oldpath[PATH_MAX];
+	if (build_path(oldpath, sizeof oldpath, dir, files[oidx]) != 0)
+		return 0;
+
+	wchar_t input[JUMP_MAX_INPUT + 1];
+	/* Prefill basename as wide string */
+	{
+		const char *mb = files[oidx];
+		size_t nconv = mbstowcs(input, mb, JUMP_MAX_INPUT);
+		if (nconv == (size_t)-1)
+			input[0] = L'\0';
+		else
+			input[nconv < JUMP_MAX_INPUT ? nconv : JUMP_MAX_INPUT] = L'\0';
+	}
+	int input_len = (int)wcslen(input);
+
+	for (;;) {
+		if (status_win) {
+			char *qmb = search_wc_to_mb(input);
+			wclear(status_win);
+			wmove(status_win, 0, 1);
+			wattron(status_win, A_BOLD);
+			wprintw(status_win, "Rename > ");
+			wattroff(status_win, A_BOLD);
+			wprintw(status_win, "%s", qmb ? qmb : "");
+			int sc = getmaxx(status_win);
+			int qlen = qmb ? (int)strlen(qmb) : 0;
+			int cc = 1 + 9 + qlen;
+			if (cc >= sc - 1) cc = sc - 2;
+			if (cc < 1) cc = 1;
+			wmove(status_win, 0, cc);
+			curs_set(1);
+			wrefresh(status_win);
+			free(qmb);
+		}
+
+		wint_t ch;
+		int kc = wget_wch(status_win, &ch);
+		if (kc == ERR)
+			continue;
+		if (kc == KEY_CODE_YES && ch == KEY_RESIZE) {
+			handleResize();
+			continue;
+		}
+		if (mcfl_is_escape(kc, ch))
+			return 0;
+		if (mcfl_is_enter_only(kc, ch)) {
+			char *newbase = search_wc_to_mb(input);
+			if (!newbase || !newbase[0] || strchr(newbase, '/')) {
+				free(newbase);
+				return 0;
+			}
+			if (strcmp(newbase, files[oidx]) == 0) {
+				free(newbase);
+				return 0;
+			}
+			char newpath[PATH_MAX];
+			if (build_path(newpath, sizeof newpath, dir, newbase) != 0) {
+				free(newbase);
+				return 0;
+			}
+			free(newbase);
+			if (rename(oldpath, newpath) != 0)
+				return 0;
+			undo_begin_batch();
+			undo_push(UNDO_RENAME, oldpath, newpath, NULL);
+			{
+				char logb[PATH_MAX * 2 + 64];
+				snprintf(logb, sizeof logb, "rename\n%s -> %s\n", oldpath, newpath);
+				op_log_set(logb);
+			}
+			return 1;
+		}
+		if (mcfl_is_backspace(kc, ch)) {
+			if (input_len > 0) {
+				input[--input_len] = L'\0';
+			}
+			continue;
+		}
+		if (kc != KEY_CODE_YES && iswprint(ch) && ch != L'/' && input_len < JUMP_MAX_INPUT) {
+			input[input_len++] = (wchar_t)ch;
+			input[input_len] = L'\0';
+		}
+	}
+}
+
+/* Multi-mark bulk rename via $EDITOR/vim on a temp name list. Returns # renamed. */
+static int browse_bulk_rename(char **files, int n, const unsigned char *marked)
+{
+	int count = 0;
+	for (int i = 0; i < n; i++)
+		if (marked && marked[i] && files[i])
+			count++;
+	if (count < 2)
+		return 0;
+
+	char tmp_path[PATH_MAX];
+	snprintf(tmp_path, sizeof tmp_path, "%s/cfl-rename.%d",
+	         cache_path ? cache_path : "/tmp", (int)getpid());
+	FILE *tf = fopen(tmp_path, "w");
+	if (!tf)
+		return 0;
+
+	/* old basenames, one per line — order = mark scan order */
+	char **olds = calloc((size_t)count, sizeof(char *));
+	if (!olds) {
+		fclose(tf);
+		unlink(tmp_path);
+		return 0;
+	}
+	int k = 0;
+	for (int i = 0; i < n; i++) {
+		if (!marked[i] || !files[i])
+			continue;
+		olds[k] = files[i];
+		fprintf(tf, "%s\n", files[i]);
+		k++;
+	}
+	fclose(tf);
+
+	const char *ed = editor && editor[0] ? editor : "vim";
+	endwin();
+	pid_t pid = fork();
+	if (pid == 0) {
+		execlp(ed, ed, tmp_path, (char *)NULL);
+		_exit(127);
+	}
+	int status = 0;
+	if (pid > 0)
+		waitpid(pid, &status, 0);
+	refresh();
+	handleResize();
+
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+		unlink(tmp_path);
+		free(olds);
+		return 0;
+	}
+
+	tf = fopen(tmp_path, "r");
+	if (!tf) {
+		unlink(tmp_path);
+		free(olds);
+		return 0;
+	}
+
+	undo_begin_batch();
+	char logbuf[OP_LOG_MAX];
+	size_t logn = 0;
+	logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn, "bulk rename\n");
+	char line[NAME_MAX + 8];
+	int renamed = 0;
+	for (int i = 0; i < count; i++) {
+		if (!fgets(line, sizeof line, tf))
+			break;
+		size_t L = strlen(line);
+		if (L > 0 && line[L - 1] == '\n')
+			line[L - 1] = '\0';
+		if (!line[0] || strchr(line, '/'))
+			continue;
+		if (strcmp(line, olds[i]) == 0)
+			continue;
+		char op[PATH_MAX], np[PATH_MAX];
+		if (build_path(op, sizeof op, dir, olds[i]) != 0)
+			continue;
+		if (build_path(np, sizeof np, dir, line) != 0)
+			continue;
+		if (rename(op, np) == 0) {
+			undo_push(UNDO_RENAME, op, np, NULL);
+			if (logn < sizeof logbuf - 1)
+				logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn,
+				                         "%s -> %s\n", olds[i], line);
+			renamed++;
+		}
+	}
+	fclose(tf);
+	unlink(tmp_path);
+	free(olds);
+	if (renamed)
+		op_log_set(logbuf);
+	return renamed;
+}
+
+/* Script dir: $XDG_CONFIG_HOME/cfl/scripts or ~/.config/cfl/scripts */
+static void scripts_dir(char *out, size_t outsz)
+{
+	const char *xdg = getenv("XDG_CONFIG_HOME");
+	if (xdg && xdg[0])
+		snprintf(out, outsz, "%s/cfl/scripts", xdg);
+	else if (info && info->pw_dir)
+		snprintf(out, outsz, "%s/.config/cfl/scripts", info->pw_dir);
+	else
+		snprintf(out, outsz, "/tmp/cfl-scripts");
+}
+
+/* Pick and run a script on marks/hover. Returns 1 if a script ran. */
+static int browse_run_script(char **files, int n, const unsigned char *marked,
+                             search_filt *filt, int sel)
+{
+	char sdir[PATH_MAX];
+	scripts_dir(sdir, sizeof sdir);
+	DIR *d = opendir(sdir);
+	if (!d) {
+		op_log_set("no scripts dir\n(create ~/.config/cfl/scripts)\n");
+		return 0;
+	}
+
+	char **names = NULL;
+	int nnames = 0, cap = 0;
+	struct dirent *ent;
+	while ((ent = readdir(d)) != NULL) {
+		if (ent->d_name[0] == '.')
+			continue;
+		char full[PATH_MAX];
+		if (snprintf(full, sizeof full, "%s/%s", sdir, ent->d_name) >= (int)sizeof full)
+			continue;
+		struct stat st;
+		if (stat(full, &st) != 0 || !S_ISREG(st.st_mode))
+			continue;
+		if (access(full, X_OK) != 0)
+			continue;
+		if (nnames >= cap) {
+			int ncap = cap ? cap * 2 : 8;
+			char **g = realloc(names, (size_t)ncap * sizeof(char *));
+			if (!g)
+				break;
+			names = g;
+			cap = ncap;
+		}
+		names[nnames] = strdup(ent->d_name);
+		if (names[nnames])
+			nnames++;
+	}
+	closedir(d);
+	if (nnames <= 0) {
+		op_log_set("no executable scripts in scripts dir\n");
+		free(names);
+		return 0;
+	}
+
+	/* simple picker: first script for now if only one; else filter list in status */
+	int pick = 0;
+	if (nnames > 1) {
+		/* status-line pick with j/k or arrows, Enter confirm */
+		int done = 0;
+		while (!done) {
+			if (status_win) {
+				wclear(status_win);
+				wmove(status_win, 0, 1);
+				wattron(status_win, A_BOLD);
+				wprintw(status_win, "Script > ");
+				wattroff(status_win, A_BOLD);
+				wprintw(status_win, "%s  (%d/%d)", names[pick], pick + 1, nnames);
+				wrefresh(status_win);
+			}
+			if (preview_win) {
+				wclear(preview_win);
+				for (int i = 0; i < nnames && i < 20; i++) {
+					if (i == pick)
+						wattron(preview_win, A_REVERSE);
+					mvwprintw(preview_win, i, 0, "%s", names[i]);
+					wattroff(preview_win, A_REVERSE);
+				}
+				wrefresh(preview_win);
+			}
+			wint_t ch = 0;
+			int kc = wget_wch(status_win, &ch);
+			if (kc == ERR)
+				continue;
+			if (mcfl_is_escape(kc, ch)) {
+				for (int i = 0; i < nnames; i++)
+					free(names[i]);
+				free(names);
+				return 0;
+			}
+			if (mcfl_is_enter_only(kc, ch) || (kc != KEY_CODE_YES && ch == '\r')) {
+				done = 1;
+				break;
+			}
+			if (kc == KEY_CODE_YES && ch == KEY_UP && pick > 0)
+				pick--;
+			else if (kc == KEY_CODE_YES && ch == KEY_DOWN && pick < nnames - 1)
+				pick++;
+		}
+	}
+
+	char **plist = NULL;
+	int pn = collect_paths(files, n, marked, filt, sel, dir, &plist);
+	if (pn <= 0) {
+		for (int i = 0; i < nnames; i++)
+			free(names[i]);
+		free(names);
+		op_log_set("script: no files selected\n");
+		return 0;
+	}
+
+	char script_path[PATH_MAX];
+	snprintf(script_path, sizeof script_path, "%s/%s", sdir, names[pick]);
+
+	/* argv: script + paths + NULL */
+	char **argv = calloc((size_t)pn + 2, sizeof(char *));
+	if (!argv) {
+		free_path_list(plist, pn);
+		for (int i = 0; i < nnames; i++)
+			free(names[i]);
+		free(names);
+		return 0;
+	}
+	argv[0] = script_path;
+	for (int i = 0; i < pn; i++)
+		argv[i + 1] = plist[i];
+	argv[pn + 1] = NULL;
+
+	int pipefd[2];
+	char logbuf[OP_LOG_MAX];
+	size_t logn = 0;
+	logn += (size_t)snprintf(logbuf + logn, sizeof logbuf - logn, "script %s\n", names[pick]);
+	if (pipe(pipefd) != 0) {
+		free(argv);
+		free_path_list(plist, pn);
+		for (int i = 0; i < nnames; i++)
+			free(names[i]);
+		free(names);
+		return 0;
+	}
+	endwin();
+	pid_t pid = fork();
+	if (pid == 0) {
+		dup2(pipefd[1], 1);
+		dup2(pipefd[1], 2);
+		close(pipefd[0]);
+		close(pipefd[1]);
+		execv(script_path, argv);
+		_exit(127);
+	}
+	close(pipefd[1]);
+	char rbuf[512];
+	ssize_t nr;
+	while ((nr = read(pipefd[0], rbuf, sizeof rbuf)) > 0) {
+		if (logn + (size_t)nr < sizeof logbuf) {
+			memcpy(logbuf + logn, rbuf, (size_t)nr);
+			logn += (size_t)nr;
+			logbuf[logn] = '\0';
+		}
+	}
+	close(pipefd[0]);
+	int st = 0;
+	if (pid > 0)
+		waitpid(pid, &st, 0);
+	refresh();
+	handleResize();
+	op_log_set(logbuf);
+
+	free(argv);
+	free_path_list(plist, pn);
+	for (int i = 0; i < nnames; i++)
+		free(names[i]);
+	free(names);
+	return 1;
+}
+
+static void mcfl_draw_help(void)
+{
+	ui_sticky_draw d;
+	if (!ui_sticky_begin(&d))
+		return;
+	ui_sticky_title(&d, "Help (F1 / Esc close)");
+	ui_sticky_puts(&d, "");
+	ui_sticky_puts(&d, "Arrows  move / parent / open");
+	ui_sticky_puts(&d, "Enter   open file or directory");
+	ui_sticky_puts(&d, "Tab     multi-mark");
+	ui_sticky_puts(&d, "type    filter list");
+	ui_sticky_puts(&d, "Del     trash marks or hover");
+	ui_sticky_puts(&d, "Ctrl+C  copy-to dest menu");
+	ui_sticky_puts(&d, "Ctrl+X  move-to dest menu");
+	ui_sticky_puts(&d, "Ctrl+R  rename (bulk=vim if multi-mark)");
+	ui_sticky_puts(&d, "Ctrl+Z  undo last trash/copy/move/rename");
+	ui_sticky_puts(&d, "Ctrl+A  select all");
+	ui_sticky_puts(&d, "C-S-A   invert selection (Alt+A fallback)");
+	ui_sticky_puts(&d, "Ctrl+.  toggle hidden (st: README)");
+	ui_sticky_puts(&d, "Ctrl+S  run script on marks/hover");
+	ui_sticky_puts(&d, "Ctrl+J  jump under $HOME");
+	ui_sticky_puts(&d, "Esc     close mode; Browse: quit (+cd)");
+	ui_sticky_puts(&d, "Ctrl+Q  quit immediately (no cd)");
+	ui_sticky_puts(&d, "st: Ctrl+M=Enter, Ctrl+[=Esc");
+	ui_sticky_footer(&d, "Esc/F1 close", "Esc/F1 close");
+	ui_sticky_end(&d);
+}
+
+/* Move selection to parent of paths[filt.indices[sel]] if that parent is listed. */
+static int mcfl_sel_to_parent_path(char **paths, int npaths, search_filt *filt, int *sel)
+{
+	if (!paths || !filt || !sel || filt->count <= 0)
+		return 0;
+	if (*sel < 0 || *sel >= filt->count)
+		return 0;
+	int oidx = filt->indices[*sel];
+	if (oidx < 0 || oidx >= npaths || !paths[oidx])
+		return 0;
+
+	char parent[PATH_MAX];
+	snprintf(parent, sizeof parent, "%s", paths[oidx]);
+	getParentPath(parent);
+	if (strcmp(parent, paths[oidx]) == 0)
+		return 0;
+
+	for (int i = 0; i < filt->count; i++) {
+		int j = filt->indices[i];
+		if (j >= 0 && j < npaths && paths[j] && strcmp(paths[j], parent) == 0) {
+			if (i == *sel)
+				return 0;
+			*sel = i;
+			return 1;
+		}
+	}
+	return 0;
 }
 
 static void mcfl_input_backspace(wchar_t *input, int *input_len, int *need_filter)
@@ -604,16 +1544,19 @@ static void jump_draw_list(char **paths, search_filt *filt, int sel, int top,
 
             wattrset(current_win, A_NORMAL);
             if (is_marked && has_colors())
-                wattron(current_win, COLOR_PAIR(3));
+                wattron(current_win, COLOR_PAIR(4));
             if (fidx == sel) {
-                if (has_colors() && !is_marked)
-                    wattron(current_win, A_REVERSE);
-                wattron(current_win, A_BOLD);
+                if (has_colors()) {
+                    if (!is_marked)
+                        wattron(current_win, COLOR_PAIR(4));
+                    wattron(current_win, A_BOLD);
+                } else {
+                    wattron(current_win, A_REVERSE | A_BOLD);
+                }
             }
 
             char entry_display[PATH_MAX + 8];
-            const char *prefix = is_marked ? "×" : " ";
-            snprintf(entry_display, sizeof entry_display, "%s%s", prefix, name);
+            snprintf(entry_display, sizeof entry_display, "%s", name);
             if ((int)strlen(entry_display) > trunc) {
                 int elen = (int)strlen(entry_display);
                 int keep = trunc - 3;
@@ -744,17 +1687,15 @@ static int jump_scan_home(jump_list *jl)
 }
 
 /* Dest-only picker: clipboard already filled (marks → clipboard → dest).
- * Returns 1 if move/copy ran, 0 if cancelled / failed to start. */
+ * Returns 1 if move/copy ran, 0 if cancelled / failed to start, -1 if Ctrl+Q quit. */
 static int show_dir_pick_dest(dir_pick_mode mode)
 {
     if (mode != DIR_PICK_MOVE && mode != DIR_PICK_COPY)
         return 0;
     if (!current_win || !preview_win || !status_win) {
-        displayAlert("UI not ready");
         return 0;
     }
     if (access(clipboard_path, F_OK) != 0 || selectedFiles <= 0) {
-        displayAlert("Nothing to transfer");
         return 0;
     }
 
@@ -769,7 +1710,6 @@ static int show_dir_pick_dest(dir_pick_mode mode)
 
     jump_list jl;
     if (jump_scan_home(&jl) != 0) {
-        displayAlert("No directories under $HOME");
         return 0;
     }
 
@@ -812,7 +1752,9 @@ static int show_dir_pick_dest(dir_pick_mode mode)
 
         jump_draw_list(jl.paths, &filt, sel, top, NULL, 0);
         int cur_oidx = (filt.count > 0) ? filt.indices[sel] : -1;
-        if (cur_oidx != last_preview_oidx) {
+        if (ui_sticky_is(UI_STICKY_HELP)) {
+            mcfl_draw_help();
+        } else if (cur_oidx != last_preview_oidx) {
             search_draw_preview_paths(jl.paths, &filt, sel, &preview_listing, &preview_n);
             last_preview_oidx = cur_oidx;
         }
@@ -825,40 +1767,64 @@ static int show_dir_pick_dest(dir_pick_mode mode)
         if (kc == ERR) continue;
         int need_filter = 0, need_preview = 0;
 
-        if (kc == KEY_CODE_YES) {
-            if (ch == KEY_RESIZE) {
-                handleResize();
+        int want_quit = 0;
+
+        if (kc == KEY_CODE_YES && ch == KEY_RESIZE) {
+            handleResize();
+            last_preview_oidx = -2;
+            continue;
+        }
+
+        if (kc == KEY_CODE_YES && ch == KEY_F(1)) {
+            if (ui_sticky_is(UI_STICKY_HELP)) {
+                ui_sticky_close();
                 last_preview_oidx = -2;
-                continue;
+            } else {
+                ui_sticky_open(UI_STICKY_HELP, 1);
             }
-            if (ch == KEY_UP && sel > 0) { sel--; need_preview = 1; }
-            else if (ch == KEY_DOWN && sel < filt.count - 1) { sel++; need_preview = 1; }
-            else if (mcfl_is_backspace(kc, ch)) {
-                mcfl_input_backspace(input, &input_len, &need_filter);
-            } else if (mcfl_is_enter(kc, ch)) {
-                if (filt.count > 0) { confirmed = 1; done = 1; }
-            } else if (ch == KEY_PPAGE) {
-                sel -= visible; if (sel < 0) sel = 0; need_preview = 1;
-            } else if (ch == KEY_NPAGE) {
-                sel += visible;
-                if (sel >= filt.count) sel = filt.count > 0 ? filt.count - 1 : 0;
+            continue;
+        }
+        if (ui_sticky_is(UI_STICKY_HELP)) {
+            if (mcfl_is_escape(kc, ch)) {
+                ui_sticky_close();
+                last_preview_oidx = -2;
+            }
+            continue;
+        }
+
+        if (kc == KEY_CODE_YES && ch == KEY_UP && sel > 0) {
+            sel--;
+            need_preview = 1;
+        } else if (kc == KEY_CODE_YES && ch == KEY_DOWN && sel < filt.count - 1) {
+            sel++;
+            need_preview = 1;
+        } else if (mcfl_is_enter_only(kc, ch)) {
+            /* Enter only finishes transfer; → does nothing here */
+            if (filt.count > 0) { confirmed = 1; done = 1; }
+        } else if (mcfl_is_key_left(kc, ch)) {
+            if (mcfl_sel_to_parent_path(jl.paths, jl.count, &filt, &sel))
                 need_preview = 1;
-            }
-        } else {
-            if (mcfl_is_backspace(kc, ch)) {
-                mcfl_input_backspace(input, &input_len, &need_filter);
-            } else if (mcfl_is_enter(kc, ch)) {
-                if (filt.count > 0) { confirmed = 1; done = 1; }
-            } else if (ch == MCFL_CTRL_Q) {
-                done = 1;
-                confirmed = 0;
-            } else if (ch == 27) {
-                done = 1;
-            } else if (iswprint(ch) && input_len < JUMP_MAX_INPUT) {
-                input[input_len++] = (wchar_t)ch;
-                input[input_len] = L'\0';
-                need_filter = 1;
-            }
+        } else if (mcfl_is_escape(kc, ch)) {
+            /* close dest mode; keep cwd */
+            done = 1;
+            confirmed = 0;
+        } else if (mcfl_is_backspace(kc, ch)) {
+            mcfl_input_backspace(input, &input_len, &need_filter);
+        } else if (kc == KEY_CODE_YES && ch == KEY_PPAGE) {
+            sel -= visible; if (sel < 0) sel = 0; need_preview = 1;
+        } else if (kc == KEY_CODE_YES && ch == KEY_NPAGE) {
+            sel += visible;
+            if (sel >= filt.count) sel = filt.count > 0 ? filt.count - 1 : 0;
+            need_preview = 1;
+        } else if (kc != KEY_CODE_YES && ch == MCFL_CTRL_Q) {
+            mcfl_quit_fast();
+            want_quit = 1;
+            done = 1;
+            confirmed = 0;
+        } else if (kc != KEY_CODE_YES && iswprint(ch) && input_len < JUMP_MAX_INPUT) {
+            input[input_len++] = (wchar_t)ch;
+            input[input_len] = L'\0';
+            need_filter = 1;
         }
 
         if (need_filter) {
@@ -876,6 +1842,18 @@ static int show_dir_pick_dest(dir_pick_mode mode)
             last_preview_oidx = -2;
         } else if (need_preview) {
             last_preview_oidx = -2;
+        }
+
+        if (want_quit) {
+            curs_set(0);
+            leaveok(current_win, FALSE);
+            leaveok(preview_win, FALSE);
+            search_free_listing(&preview_listing, &preview_n);
+            search_filt_free(&filt);
+            jump_list_free(&jl);
+            ueberzugpp_remove();
+            clearFlagImg = 1;
+            return -1;
         }
     }
 
@@ -896,8 +1874,6 @@ static int show_dir_pick_dest(dir_pick_mode mode)
                 else
                     copyFiles(jl.paths[oidx]);
                 did_transfer = 1;
-            } else {
-                displayAlert(mode == DIR_PICK_MOVE ? "Cannot move there" : "Cannot copy there");
             }
         }
     }
@@ -924,7 +1900,6 @@ static int mcfl_dir_browser(void)
         char **files = NULL;
         int n = getFiles(dir, &files);
         if (n < 0) {
-            displayAlert("Couldn't open directory");
             /* try parent so we don't hard-quit the session */
             char prev[PATH_MAX];
             snprintf(prev, sizeof prev, "%s", dir);
@@ -942,7 +1917,6 @@ static int mcfl_dir_browser(void)
         if (!marked) {
             for (int i = 0; i < n; i++) free(files[i]);
             free(files);
-            displayAlert("Couldn't allocate memory!");
             return MCFL_BACK;
         }
 
@@ -983,7 +1957,11 @@ static int mcfl_dir_browser(void)
             int nmarked = search_count_marked(marked, n);
             search_draw_marked_list(files, &filt, sel, top, marked);
             int cur = filt.count > 0 ? filt.indices[sel] : -1;
-            if (cur != last_info || nmarked != last_nm) {
+            if (ui_sticky_is(UI_STICKY_HELP)) {
+                mcfl_draw_help();
+            } else if (op_log_active) {
+                op_log_draw();
+            } else if (cur != last_info || nmarked != last_nm) {
                 search_draw_preview(files, &filt, sel, &preview_listing, &preview_n);
                 last_info = cur;
                 last_nm = nmarked;
@@ -994,123 +1972,195 @@ static int mcfl_dir_browser(void)
                 wclear(status_win);
                 wmove(status_win, 0, 1);
                 wattron(status_win, A_BOLD);
-                wprintw(status_win, "Browse > ");
+                if (ui_sticky_is(UI_STICKY_HELP))
+                    wprintw(status_win, "Help > ");
+                else
+                    wprintw(status_win, "Browse > ");
                 wattroff(status_win, A_BOLD);
-                wprintw(status_win, "%s", qmb ? qmb : "");
+                if (!ui_sticky_is(UI_STICKY_HELP))
+                    wprintw(status_win, "%s", qmb ? qmb : "");
+                else
+                    wprintw(status_win, "F1/Esc close");
                 int sc = getmaxx(status_win);
                 int qlen = qmb ? (int)strlen(qmb) : 0;
-                int cc = 1 + 9 + qlen;
+                int cc = 1 + 9 + (ui_sticky_is(UI_STICKY_HELP) ? 12 : qlen);
                 if (cc >= sc - 1) cc = sc - 2;
                 if (cc < 1) cc = 1;
                 wmove(status_win, 0, cc);
-                curs_set(1);
+                curs_set(ui_sticky_is(UI_STICKY_HELP) ? 0 : 1);
                 wrefresh(status_win);
             }
             free(qmb);
 
-            wint_t ch;
-            int kc = wget_wch(status_win, &ch);
-            if (kc == ERR) continue;
+            wint_t ch = 0;
+            int kc = 0, syn = MCFL_K_NONE;
+            if (mcfl_read_key(status_win, &kc, &ch, &syn) == ERR)
+                continue;
             int need_filter = 0, need_prev = 0;
 
-            if (kc == KEY_CODE_YES) {
-                if (ch == KEY_RESIZE) { handleResize(); last_info = -2; continue; }
-                if (ch == KEY_UP && sel > 0) { sel--; need_prev = 1; }
-                else if (ch == KEY_DOWN && sel < filt.count - 1) { sel++; need_prev = 1; }
-                else if (mcfl_is_backspace(kc, ch)) {
-                    mcfl_input_backspace(input, &input_len, &need_filter);
-                } else if (mcfl_is_enter(kc, ch)) {
-                    if (filt.count > 0) {
-                        int oidx = filt.indices[sel];
-                        if (oidx >= 0 && oidx < n && files[oidx]) {
-                            char path[PATH_MAX];
-                            if (build_path(path, sizeof path, dir, files[oidx]) == 0) {
-                                if (isRegularFile(path) == 0) {
-                                    snprintf(dir, sizeof dir, "%s", path);
-                                    leave = 1;
-                                    result = MCFL_OK; /* reload same browser */
-                                } else {
-                                    openFile(path);
-                                }
-                            }
-                        }
-                    }
-                } else if (ch == KEY_PPAGE) {
-                    sel -= visible; if (sel < 0) sel = 0; need_prev = 1;
-                } else if (ch == KEY_NPAGE) {
-                    sel += visible;
-                    if (sel >= filt.count) sel = filt.count > 0 ? filt.count - 1 : 0;
-                    need_prev = 1;
-                }
-            } else {
-                if (mcfl_is_backspace(kc, ch)) {
-                    mcfl_input_backspace(input, &input_len, &need_filter);
-                } else if (mcfl_is_enter(kc, ch)) {
-                    if (filt.count > 0) {
-                        int oidx = filt.indices[sel];
-                        if (oidx >= 0 && oidx < n && files[oidx]) {
-                            char path[PATH_MAX];
-                            if (build_path(path, sizeof path, dir, files[oidx]) == 0) {
-                                if (isRegularFile(path) == 0) {
-                                    snprintf(dir, sizeof dir, "%s", path);
-                                    leave = 1;
-                                    result = MCFL_OK;
-                                } else {
-                                    openFile(path);
-                                }
-                            }
-                        }
-                    }
-                } else if (ch == MCFL_CTRL_Q) {
-                    leave = 1;
-                    result = MCFL_QUIT;
-                } else if (ch == MCFL_CTRL_J) {
-                    /* recursive jump under $HOME; on OK reload browse at new dir */
-                    int jr = mcfl_jump_loop();
-                    if (jr == MCFL_QUIT) {
-                        leave = 1;
-                        result = MCFL_QUIT;
-                    } else if (jr == MCFL_OK) {
-                        leave = 1;
-                        result = MCFL_OK; /* reload listing for new dir */
-                    }
+            if (kc == KEY_CODE_YES && ch == KEY_RESIZE) {
+                handleResize();
+                last_info = -2;
+                continue;
+            }
+
+            /* F1: toggle help (overrides other ops while open) */
+            if (kc == KEY_CODE_YES && ch == KEY_F(1)) {
+                if (ui_sticky_is(UI_STICKY_HELP)) {
+                    ui_sticky_close();
                     last_info = -2;
-                } else if (ch == 27) {
-                    /* parent directory */
-                    char prev[PATH_MAX];
-                    snprintf(prev, sizeof prev, "%s", dir);
-                    getParentPath(dir);
-                    if (strcmp(prev, dir) != 0) {
+                } else {
+                    ui_sticky_open(UI_STICKY_HELP, 1);
+                }
+                continue;
+            }
+
+            if (ui_sticky_is(UI_STICKY_HELP)) {
+                if (mcfl_is_escape(kc, ch) && syn == MCFL_K_NONE) {
+                    ui_sticky_close();
+                    last_info = -2;
+                }
+                /* ignore all other keys while help is open */
+                continue;
+            }
+
+            if (syn == MCFL_K_CTRL_SHIFT_A) {
+                marks_invert(marked, n);
+                need_prev = 1;
+            } else if (syn == MCFL_K_CTRL_DOT) {
+                hiddenFlag = hiddenFlag ? 0 : 1;
+                leave = 1;
+                result = MCFL_OK;
+                continue;
+            } else if (kc == KEY_CODE_YES && ch == KEY_UP && sel > 0) {
+                sel--;
+                need_prev = 1;
+                op_log_clear();
+            } else if (kc == KEY_CODE_YES && ch == KEY_DOWN && sel < filt.count - 1) {
+                sel++;
+                need_prev = 1;
+                op_log_clear();
+            } else if (mcfl_is_enter(kc, ch)) {
+                /* Enter / → : open dir or file */
+                if (filt.count > 0) {
+                    int oidx = filt.indices[sel];
+                    if (oidx >= 0 && oidx < n && files[oidx]) {
+                        char path[PATH_MAX];
+                        if (build_path(path, sizeof path, dir, files[oidx]) == 0) {
+                            if (isRegularFile(path) == 0) {
+                                snprintf(dir, sizeof dir, "%s", path);
+                                leave = 1;
+                                result = MCFL_OK; /* reload same browser */
+                            } else {
+                                openFile(path);
+                            }
+                        }
+                    }
+                }
+            } else if (mcfl_is_key_left(kc, ch)) {
+                /* ← only: parent directory */
+                char prev[PATH_MAX];
+                snprintf(prev, sizeof prev, "%s", dir);
+                getParentPath(dir);
+                if (strcmp(prev, dir) != 0) {
+                    leave = 1;
+                    result = MCFL_OK;
+                }
+            } else if (mcfl_is_escape(kc, ch)) {
+                /* Esc on Browse: quit cfl with cd-on-quit (save lastdir) */
+                leave = 1;
+                result = MCFL_QUIT;
+            } else if (mcfl_is_delete_key(kc, ch)) {
+                char **plist = NULL;
+                int pn = collect_paths(files, n, marked, &filt, sel, dir, &plist);
+                if (pn > 0 && trash_paths_batch(plist, pn) > 0) {
+                    leave = 1;
+                    result = MCFL_OK;
+                }
+                free_path_list(plist, pn);
+                handleResize();
+                last_info = -2;
+            } else if (mcfl_is_backspace(kc, ch)) {
+                mcfl_input_backspace(input, &input_len, &need_filter);
+            } else if (kc == KEY_CODE_YES && ch == KEY_PPAGE) {
+                sel -= visible; if (sel < 0) sel = 0; need_prev = 1; op_log_clear();
+            } else if (kc == KEY_CODE_YES && ch == KEY_NPAGE) {
+                sel += visible;
+                if (sel >= filt.count) sel = filt.count > 0 ? filt.count - 1 : 0;
+                need_prev = 1;
+                op_log_clear();
+            } else if (kc != KEY_CODE_YES && ch == MCFL_CTRL_Q) {
+                mcfl_quit_fast();
+                leave = 1;
+                result = MCFL_QUIT;
+            } else if (kc != KEY_CODE_YES && ch == MCFL_CTRL_Z) {
+                if (undo_apply() > 0) {
+                    leave = 1;
+                    result = MCFL_OK;
+                }
+                handleResize();
+                last_info = -2;
+            } else if (kc != KEY_CODE_YES && ch == MCFL_CTRL_R) {
+                int nm = search_count_marked(marked, n);
+                if (nm >= 2) {
+                    if (browse_bulk_rename(files, n, marked) > 0) {
                         leave = 1;
                         result = MCFL_OK;
                     }
-                } else if (ch == MCFL_CTRL_V || ch == MCFL_CTRL_X) {
-                    if (clipboard_from_rel_marks(files, n, marked, &filt, sel) > 0) {
-                        if (show_dir_pick_dest(ch == MCFL_CTRL_V ? DIR_PICK_COPY : DIR_PICK_MOVE)) {
-                            /* Rescan cwd so moved/copied-away items disappear / order resets */
-                            leave = 1;
-                            result = MCFL_OK;
-                        } else {
-                            last_info = -2;
-                        }
+                } else if (browse_rename_hover(files, n, &filt, sel)) {
+                    leave = 1;
+                    result = MCFL_OK;
+                }
+                last_info = -2;
+            } else if (kc != KEY_CODE_YES && ch == MCFL_CTRL_A) {
+                marks_select_all(marked, n);
+                need_prev = 1;
+            } else if (kc != KEY_CODE_YES && ch == MCFL_CTRL_S) {
+                if (browse_run_script(files, n, marked, &filt, sel)) {
+                    leave = 1;
+                    result = MCFL_OK;
+                }
+                last_info = -2;
+            } else if (kc != KEY_CODE_YES && ch == MCFL_CTRL_J) {
+                /* recursive jump under $HOME; on OK reload browse at new dir */
+                int jr = mcfl_jump_loop();
+                if (jr == MCFL_QUIT) {
+                    leave = 1;
+                    result = MCFL_QUIT;
+                } else if (jr == MCFL_OK) {
+                    leave = 1;
+                    result = MCFL_OK; /* reload listing for new dir */
+                }
+                last_info = -2;
+            } else if (kc != KEY_CODE_YES && (ch == MCFL_CTRL_C || ch == MCFL_CTRL_X)) {
+                if (clipboard_from_rel_marks(files, n, marked, &filt, sel) > 0) {
+                    int dr = show_dir_pick_dest(ch == MCFL_CTRL_C ? DIR_PICK_COPY : DIR_PICK_MOVE);
+                    if (dr < 0) {
+                        leave = 1;
+                        result = MCFL_QUIT;
+                    } else if (dr > 0) {
+                        /* Rescan cwd so moved/copied-away items disappear / order resets */
+                        leave = 1;
+                        result = MCFL_OK;
                     } else {
-                        displayAlert("Nothing to transfer");
                         last_info = -2;
                     }
-                } else if (ch == '\t') {
-                    if (filt.count > 0) {
-                        int oidx = filt.indices[sel];
-                        if (oidx >= 0 && oidx < n) {
-                            marked[oidx] = marked[oidx] ? 0 : 1;
-                            if (sel < filt.count - 1) sel++;
-                            need_prev = 1;
-                        }
-                    }
-                } else if (iswprint(ch) && ch != L'\t' && input_len < JUMP_MAX_INPUT) {
-                    input[input_len++] = (wchar_t)ch;
-                    input[input_len] = L'\0';
-                    need_filter = 1;
+                } else {
+                    last_info = -2;
                 }
+            } else if (kc != KEY_CODE_YES && ch == '\t') {
+                if (filt.count > 0) {
+                    int oidx = filt.indices[sel];
+                    if (oidx >= 0 && oidx < n) {
+                        marked[oidx] = marked[oidx] ? 0 : 1;
+                        if (sel < filt.count - 1) sel++;
+                        need_prev = 1;
+                    }
+                }
+            } else if (kc != KEY_CODE_YES && iswprint(ch) && ch != L'\t' && input_len < JUMP_MAX_INPUT) {
+                input[input_len++] = (wchar_t)ch;
+                input[input_len] = L'\0';
+                need_filter = 1;
             }
 
             if (need_filter) {
@@ -1131,6 +2181,8 @@ static int mcfl_dir_browser(void)
             }
         }
 
+        if (ui_sticky_is(UI_STICKY_HELP))
+            ui_sticky_close();
         curs_set(0);
         leaveok(current_win, FALSE);
         leaveok(preview_win, FALSE);
@@ -1162,14 +2214,12 @@ static int mcfl_jump_loop(void)
 
     jump_list jl;
     if (jump_scan_home(&jl) != 0) {
-        displayAlert("No directories under $HOME");
         return MCFL_BACK;
     }
 
     unsigned char *marked = calloc((size_t)jl.count, 1);
     if (!marked) {
         jump_list_free(&jl);
-        displayAlert("Couldn't allocate memory!");
         return MCFL_BACK;
     }
 
@@ -1215,7 +2265,11 @@ static int mcfl_jump_loop(void)
 
         jump_draw_list(jl.paths, &filt, sel, top, marked, jl.count);
         int cur_oidx = filt.count > 0 ? filt.indices[sel] : -1;
-        if (cur_oidx != last_preview_oidx) {
+        if (ui_sticky_is(UI_STICKY_HELP)) {
+            mcfl_draw_help();
+        } else if (op_log_active) {
+            op_log_draw();
+        } else if (cur_oidx != last_preview_oidx) {
             search_draw_preview_paths(jl.paths, &filt, sel, &preview_listing, &preview_n);
             last_preview_oidx = cur_oidx;
         }
@@ -1223,78 +2277,122 @@ static int mcfl_jump_loop(void)
         jump_draw_status(DIR_PICK_JUMP, qmb ? qmb : "", sel, filt.count, jl.count, nmarked);
         free(qmb);
 
-        wint_t ch;
-        int kc = wget_wch(status_win, &ch);
-        if (kc == ERR) continue;
+        wint_t ch = 0;
+        int kc = 0, syn = MCFL_K_NONE;
+        if (mcfl_read_key(status_win, &kc, &ch, &syn) == ERR)
+            continue;
         int need_filter = 0, need_preview = 0;
 
-        if (kc == KEY_CODE_YES) {
-            if (ch == KEY_RESIZE) { handleResize(); last_preview_oidx = -2; continue; }
-            if (ch == KEY_UP && sel > 0) { sel--; need_preview = 1; }
-            else if (ch == KEY_DOWN && sel < filt.count - 1) { sel++; need_preview = 1; }
-            else if (mcfl_is_backspace(kc, ch)) {
-                mcfl_input_backspace(input, &input_len, &need_filter);
-            } else if (mcfl_is_enter(kc, ch)) {
-                if (filt.count > 0) {
-                    int oidx = filt.indices[sel];
-                    if (oidx >= 0 && oidx < jl.count && jl.paths[oidx]) {
-                        struct stat st;
-                        if (stat(jl.paths[oidx], &st) == 0 && S_ISDIR(st.st_mode)) {
-                            snprintf(dir, sizeof dir, "%s", jl.paths[oidx]);
-                            done = 1;
-                            result = MCFL_OK; /* return to browse at this dir */
-                        }
-                    }
-                }
-            } else if (ch == KEY_PPAGE) {
-                sel -= visible; if (sel < 0) sel = 0; need_preview = 1;
-            } else if (ch == KEY_NPAGE) {
-                sel += visible;
-                if (sel >= filt.count) sel = filt.count > 0 ? filt.count - 1 : 0;
-                need_preview = 1;
-            }
-        } else {
-            if (mcfl_is_backspace(kc, ch)) {
-                mcfl_input_backspace(input, &input_len, &need_filter);
-            } else if (mcfl_is_enter(kc, ch)) {
-                if (filt.count > 0) {
-                    int oidx = filt.indices[sel];
-                    if (oidx >= 0 && oidx < jl.count && jl.paths[oidx]) {
-                        struct stat st;
-                        if (stat(jl.paths[oidx], &st) == 0 && S_ISDIR(st.st_mode)) {
-                            snprintf(dir, sizeof dir, "%s", jl.paths[oidx]);
-                            done = 1;
-                            result = MCFL_OK;
-                        }
-                    }
-                }
-            } else if (ch == MCFL_CTRL_Q) {
-                done = 1;
-                result = MCFL_QUIT;
-            } else if (ch == 27) {
-                done = 1;
-                result = MCFL_BACK; /* cancel jump, keep previous dir */
-            } else if (ch == MCFL_CTRL_V || ch == MCFL_CTRL_X) {
-                /* marks → clipboard → dest */
-                if (clipboard_from_abs_marks(jl.paths, jl.count, marked, &filt, sel) > 0)
-                    show_dir_pick_dest(ch == MCFL_CTRL_V ? DIR_PICK_COPY : DIR_PICK_MOVE);
-                else
-                    displayAlert("Nothing to transfer");
+        if (kc == KEY_CODE_YES && ch == KEY_RESIZE) {
+            handleResize();
+            last_preview_oidx = -2;
+            continue;
+        }
+
+        if (kc == KEY_CODE_YES && ch == KEY_F(1)) {
+            if (ui_sticky_is(UI_STICKY_HELP)) {
+                ui_sticky_close();
                 last_preview_oidx = -2;
-            } else if (ch == '\t') {
-                if (filt.count > 0) {
-                    int oidx = filt.indices[sel];
-                    if (oidx >= 0 && oidx < jl.count) {
-                        marked[oidx] = marked[oidx] ? 0 : 1;
-                        if (sel < filt.count - 1) sel++;
-                        need_preview = 1;
+            } else {
+                ui_sticky_open(UI_STICKY_HELP, 1);
+            }
+            continue;
+        }
+        if (ui_sticky_is(UI_STICKY_HELP)) {
+            if (mcfl_is_escape(kc, ch) && syn == MCFL_K_NONE) {
+                ui_sticky_close();
+                last_preview_oidx = -2;
+            }
+            continue;
+        }
+
+        if (syn == MCFL_K_CTRL_SHIFT_A) {
+            marks_invert(marked, jl.count);
+            need_preview = 1;
+        } else if (kc == KEY_CODE_YES && ch == KEY_UP && sel > 0) {
+            sel--;
+            need_preview = 1;
+            op_log_clear();
+        } else if (kc == KEY_CODE_YES && ch == KEY_DOWN && sel < filt.count - 1) {
+            sel++;
+            need_preview = 1;
+            op_log_clear();
+        } else if (mcfl_is_enter(kc, ch)) {
+            /* Enter / → : jump into selected dir → Browse */
+            if (filt.count > 0) {
+                int oidx = filt.indices[sel];
+                if (oidx >= 0 && oidx < jl.count && jl.paths[oidx]) {
+                    struct stat st;
+                    if (stat(jl.paths[oidx], &st) == 0 && S_ISDIR(st.st_mode)) {
+                        snprintf(dir, sizeof dir, "%s", jl.paths[oidx]);
+                        done = 1;
+                        result = MCFL_OK;
                     }
                 }
-            } else if (iswprint(ch) && ch != L'\t' && input_len < JUMP_MAX_INPUT) {
-                input[input_len++] = (wchar_t)ch;
-                input[input_len] = L'\0';
-                need_filter = 1;
             }
+        } else if (mcfl_is_key_left(kc, ch)) {
+            /* ← : parent row in list (does not close Jump) */
+            if (mcfl_sel_to_parent_path(jl.paths, jl.count, &filt, &sel))
+                need_preview = 1;
+        } else if (mcfl_is_escape(kc, ch)) {
+            /* Esc: close Jump mode; keep previous dir */
+            done = 1;
+            result = MCFL_BACK;
+        } else if (mcfl_is_delete_key(kc, ch)) {
+            char **plist = NULL;
+            int pn = collect_paths(jl.paths, jl.count, marked, &filt, sel, NULL, &plist);
+            if (pn > 0) {
+                trash_paths_batch(plist, pn);
+                /* Jump list is stale after trash; leave to Browse */
+                done = 1;
+                result = MCFL_OK;
+            }
+            free_path_list(plist, pn);
+            handleResize();
+            last_preview_oidx = -2;
+        } else if (mcfl_is_backspace(kc, ch)) {
+            mcfl_input_backspace(input, &input_len, &need_filter);
+        } else if (kc == KEY_CODE_YES && ch == KEY_PPAGE) {
+            sel -= visible; if (sel < 0) sel = 0; need_preview = 1; op_log_clear();
+        } else if (kc == KEY_CODE_YES && ch == KEY_NPAGE) {
+            sel += visible;
+            if (sel >= filt.count) sel = filt.count > 0 ? filt.count - 1 : 0;
+            need_preview = 1;
+            op_log_clear();
+        } else if (kc != KEY_CODE_YES && ch == MCFL_CTRL_Q) {
+            mcfl_quit_fast();
+            done = 1;
+            result = MCFL_QUIT;
+        } else if (kc != KEY_CODE_YES && ch == MCFL_CTRL_Z) {
+            undo_apply();
+            handleResize();
+            last_preview_oidx = -2;
+        } else if (kc != KEY_CODE_YES && ch == MCFL_CTRL_A) {
+            marks_select_all(marked, jl.count);
+            need_preview = 1;
+        } else if (kc != KEY_CODE_YES && (ch == MCFL_CTRL_C || ch == MCFL_CTRL_X)) {
+            if (clipboard_from_abs_marks(jl.paths, jl.count, marked, &filt, sel) > 0) {
+                int dr = show_dir_pick_dest(ch == MCFL_CTRL_C ? DIR_PICK_COPY : DIR_PICK_MOVE);
+                if (dr < 0) {
+                    /* dest already called mcfl_quit_fast() */
+                    done = 1;
+                    result = MCFL_QUIT;
+                }
+            }
+            last_preview_oidx = -2;
+        } else if (kc != KEY_CODE_YES && ch == '\t') {
+            if (filt.count > 0) {
+                int oidx = filt.indices[sel];
+                if (oidx >= 0 && oidx < jl.count) {
+                    marked[oidx] = marked[oidx] ? 0 : 1;
+                    if (sel < filt.count - 1) sel++;
+                    need_preview = 1;
+                }
+            }
+        } else if (kc != KEY_CODE_YES && iswprint(ch) && ch != L'\t' && input_len < JUMP_MAX_INPUT) {
+            input[input_len++] = (wchar_t)ch;
+            input[input_len] = L'\0';
+            need_filter = 1;
         }
 
         if (need_filter) {
@@ -1329,8 +2427,9 @@ static int mcfl_jump_loop(void)
 
 static void run_mcfl_session(void)
 {
-    /* Primary UI: Browse (cwd). -j or Ctrl+J: recursive Jump under $HOME. */
-    if (start_jump_to) {
+	mcfl_term_modkeys_on();
+	/* Primary UI: Browse (cwd). -j or Ctrl+J: recursive Jump under $HOME. */
+	if (start_jump_to) {
         start_jump_to = 0;
         int jr = mcfl_jump_loop();
         if (jr == MCFL_QUIT)

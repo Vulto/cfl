@@ -17,7 +17,6 @@ int getFiles(char* directory, char*** target) {
 	result = malloc((size_t)capacity * sizeof(char *));
 	if(result == NULL) {
 		closedir(pDir);
-		displayAlert("Couldn't allocate memory!");
 		exit(1);
 	}
 
@@ -32,7 +31,6 @@ int getFiles(char* directory, char*** target) {
 				char **grown = realloc(result, (size_t)capacity * sizeof(char *));
 				if(grown == NULL) {
 					closedir(pDir);
-					displayAlert("Couldn't allocate memory!");
 					exit(1);
 				}
 				result = grown;
@@ -41,7 +39,6 @@ int getFiles(char* directory, char*** target) {
 			result[i] = strdup(pDirent->d_name);
 			if(result[i++] == NULL) {
 				closedir(pDir);
-				displayAlert("Couldn't allocate memory!");
 				exit(1);
 			}
 		}
@@ -86,7 +83,6 @@ static void search_filt_init(search_filt *f) {
     f->cap = SEARCH_FILT_CAP;
     f->indices = malloc((size_t)f->cap * sizeof(int));
     if (!f->indices) {
-        displayAlert("Couldn't allocate memory!");
         exit(1);
     }
     f->count = 0;
@@ -103,7 +99,6 @@ static void search_filt_push(search_filt *f, int idx) {
         f->cap *= 2;
         int *grown = realloc(f->indices, (size_t)f->cap * sizeof(int));
         if (!grown) {
-            displayAlert("Couldn't allocate memory!");
             exit(1);
         }
         f->indices = grown;
@@ -314,7 +309,7 @@ static void search_draw_preview(char **files, search_filt *filt, int sel,
         wclear(preview_win);
         preview_scroll = 0;
         len_preview = -1;
-        wmove(preview_win, 1, 0);
+        wmove(preview_win, 0, 0);
         wprintw(preview_win, "Path too long");
         wrefresh(preview_win);
         return;
@@ -347,7 +342,7 @@ static int search_count_marked(const unsigned char *marked, int n)
 	return c;
 }
 
-/* File list with Tab multi-mark (× prefix, pair 3). Used by mcfl browse. */
+/* File list with Tab multi-mark (dark grey highlight, no mark prefix). */
 static void search_draw_marked_list(char **files, search_filt *filt, int sel, int top,
 				    const unsigned char *marked)
 {
@@ -356,11 +351,7 @@ static void search_draw_marked_list(char **files, search_filt *filt, int sel, in
 	int rows, cols;
 	getmaxyx(current_win, rows, cols);
 	int visible = rows > 0 ? rows : 1;
-	/*
-	 * List layout: content | 1 blank | bar | 1 blank
-	 * (bar inset; trailing blank restored on the right of the list scrollbar).
-	 * 1-col mark gutter remains in the entry string ("×" / " ").
-	 */
+	/* content | 1 blank | bar | 1 blank */
 	int trunc = cols - 3;
 	if (trunc < 1) trunc = 1;
 	if (filt->count == 0) {
@@ -377,31 +368,34 @@ static void search_draw_marked_list(char **files, search_filt *filt, int sel, in
 			int is_dir = path_ok && (isRegularFile(full) == 0);
 			wattrset(current_win, A_NORMAL);
 			if (is_marked && has_colors())
-				wattron(current_win, COLOR_PAIR(3));
+				wattron(current_win, COLOR_PAIR(4));
 			if (fidx == sel) {
-				if (has_colors() && !is_marked)
-					wattron(current_win, A_REVERSE);
-				wattron(current_win, A_BOLD);
+				if (has_colors()) {
+					if (!is_marked)
+						wattron(current_win, COLOR_PAIR(4));
+					wattron(current_win, A_BOLD);
+				} else {
+					wattron(current_win, A_REVERSE | A_BOLD);
+				}
 			}
 			if (is_dir) wattron(current_win, A_BOLD);
 			wmove(current_win, v, 0);
 			char entry_display[PATH_MAX * 2 + 32];
-			const char *prefix = is_marked ? "×" : " ";
 			if (path_ok && isSymlink(full)) {
 				char target[PATH_MAX];
 				if (readSymlinkTarget(full, target, sizeof target) == 0)
-					snprintf(entry_display, sizeof entry_display, "%s%s → %s", prefix, name, target);
+					snprintf(entry_display, sizeof entry_display, "%s → %s", name, target);
 				else
-					snprintf(entry_display, sizeof entry_display, "%s%s → (unreadable)", prefix, name);
+					snprintf(entry_display, sizeof entry_display, "%s → (unreadable)", name);
 			} else {
-				snprintf(entry_display, sizeof entry_display, "%s%s", prefix, name);
+				snprintf(entry_display, sizeof entry_display, "%s", name);
 			}
 			if ((int)strlen(entry_display) > trunc)
 				entry_display[trunc] = '\0';
 			wprintw(current_win, "%s", entry_display);
 			if (fidx == sel || is_marked) {
 				int used = (int)strlen(entry_display);
-				/* fill content only; leave blank before bar (and bar/trail for drawScrollbar) */
+				/* pad under same attr; stop before bar columns */
 				for (int c = used; c < cols - 3; c++)
 					mvwaddch(current_win, v, c, ' ');
 			}

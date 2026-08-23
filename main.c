@@ -46,6 +46,9 @@ char *clipboard_path = NULL;
 char *temp_clipboard_path = NULL;
 char *trash_path = NULL;
 char *last = NULL;
+/* 1: write lastdir so shell wrapper cds after exit (Esc quit).
+ * 0: Ctrl+Q fast quit — do not cd the parent shell. */
+int cfl_cd_on_quit = 1;
 
 #include "preview.h"
 #include "search.h"
@@ -238,20 +241,27 @@ void init(int argc, char* argv[]) {
 }
 
 
+/* Resolve path used for shell-wrapper lastdir (CFL_LASTDIR or cache/lastdir). */
+static const char *lastdir_path(char *pathbuf, size_t pathbuf_sz) {
+	const char *out = getenv("CFL_LASTDIR");
+	if (out && out[0])
+		return out;
+	if (!cache_path)
+		return NULL;
+	if (snprintf(pathbuf, pathbuf_sz, "%s/lastdir", cache_path) >= (int)pathbuf_sz)
+		return NULL;
+	return pathbuf;
+}
+
 static void save_lastdir(void) {
 	struct stat st;
 	if (dir[0] == '\0' || stat(dir, &st) != 0 || !S_ISDIR(st.st_mode))
 		return;
 
 	char pathbuf[PATH_MAX];
-	const char *out = getenv("CFL_LASTDIR");
-	if (!out || !out[0]) {
-		if (!cache_path)
-			return;
-		if (snprintf(pathbuf, sizeof pathbuf, "%s/lastdir", cache_path) >= (int)sizeof pathbuf)
-			return;
-		out = pathbuf;
-	}
+	const char *out = lastdir_path(pathbuf, sizeof pathbuf);
+	if (!out)
+		return;
 
 	FILE *f = fopen(out, "w");
 	if (!f)
@@ -260,10 +270,22 @@ static void save_lastdir(void) {
 	fclose(f);
 }
 
+/* Ctrl+Q: drop any lastdir so the shell wrapper does not cd. */
+static void clear_lastdir(void) {
+	char pathbuf[PATH_MAX];
+	const char *out = lastdir_path(pathbuf, sizeof pathbuf);
+	if (out)
+		remove(out);
+}
+
 
 void WrappeUp(void) {
-	/* Leave path for shell wrapper: cd to last dir after q */
-	save_lastdir();
+	/* Esc quit: leave path for shell wrapper (cfl.sh cds there).
+	 * Ctrl+Q: no cd — clear any stale lastdir. */
+	if (cfl_cd_on_quit)
+		save_lastdir();
+	else
+		clear_lastdir();
 
 	/* Drop session selection so nothing persists across restarts */
 	if (clipboard_path)
@@ -279,6 +301,7 @@ void WrappeUp(void) {
 	free(last);
     ueberzugpp_remove();
 	ueberzugpp_stop();
+	mcfl_term_modkeys_off();
 	endwin();
 }
 

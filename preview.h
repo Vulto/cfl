@@ -363,7 +363,7 @@ static void preview_put_line(int y, const char *s) {
 static void preview_print_message(const char *message, int maxx) {
     (void)maxx;
     wclear(preview_win);
-    preview_put_line(1, message ? message : "");
+    preview_put_line(0, message ? message : "");
     preview_blank_pad_before_bar();
     wrefresh(preview_win);
 }
@@ -434,7 +434,7 @@ static void render_text_preview(const char *path, int maxx) {
     }
 
     wclear(preview_win);
-    int y = 1;
+    int y = 0;
     for (int i = 0; i < avail_lines && fgets(line, sizeof(line), fp); ++i)
         preview_put_line(y++, line);
     fclose(fp);
@@ -448,6 +448,7 @@ static inline int get_preview_visible_rows(void) {
 	if (!preview_win) return 20;
 	int r, c;
 	getmaxyx(preview_win, r, c);
+	(void)c;
 	return (r > 0) ? r : 1;
 }
 
@@ -548,9 +549,9 @@ static void render_hex_preview(const char *path, int maxx) {
     wclear(preview_win);
 
     size_t offset = start_offset;
-    int y = 1;
+    int y = 0;
     int maxw = preview_safe_width(cols);
-    while (offset < start_offset + n && y <= avail_lines) {
+    while (offset < start_offset + n && y < avail_lines) {
         char linebuf[128];
         char ascii[17];
         ascii[16] = '\0';

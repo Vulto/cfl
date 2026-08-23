@@ -1,11 +1,11 @@
-# cfl shell integration — cd to last browsed directory on quit (q)
+# cfl shell integration — cd to last browsed directory after Esc quit
 #
 # Install:  sudo cp cfl.sh /usr/share/cfl/cfl.sh
 # Enable:   echo 'source /usr/share/cfl/cfl.sh' >> ~/.bashrc   # or ~/.zshrc
 #
-# After this, running `cfl` and pressing q leaves the shell in the last directory
-# you navigated to. The bare binary (command cfl / full path) does not change CWD
-# by itself — a child process cannot chdir its parent.
+# After this, running `cfl` and quitting with Esc leaves the shell in the last
+# directory you navigated to. Ctrl+Q quits without writing lastdir, so CWD stays.
+# The bare binary cannot chdir its parent — this wrapper does.
 
 cfl() {
 	# Avoid nested function recursion if something re-sources oddly
