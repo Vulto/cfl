@@ -198,8 +198,8 @@ int main(int argc, char* argv[]) {
                     displayAlert("Path too long");
                     break;
                 }
-                char *encoded = replace_alloc(temp_dir, "\n", "//");
-                if (encoded == NULL) {
+                char encoded[PATH_MAX * 3 + 1];
+                if (CflEncodePath(temp_dir, encoded, sizeof encoded) != 0) {
                     displayAlert("Couldn't encode selected path");
                     break;
                 }
@@ -210,7 +210,6 @@ int main(int argc, char* argv[]) {
                     writeClipboard(encoded);
                     selectedFiles++;
                 }
-                free(encoded);
                 scrollDown();
                 break;
             }
