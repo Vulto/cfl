@@ -26,6 +26,13 @@ extern int readSymlinkTarget(const char *path, char *buf, size_t bufsz);
 
 /* Caching for preview target + totals (text line count or hex rows) */
 static char preview_target_path[PATH_MAX] = "";
+
+static void preview_invalidate(void) {
+    preview_target_path[0] = '\0';
+    preview_total_lines = 0;
+    preview_scroll = 0;
+}
+
 /* preview_total_lines is defined in functions.h and externed above */
 
 static unsigned img_be16(const unsigned char *p) {
