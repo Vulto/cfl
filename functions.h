@@ -989,6 +989,18 @@ void moveFiles(char *present_dir) {
             continue;
         }
 
+        struct stat destinationStat;
+        if (lstat(dest_path, &destinationStat) == 0) {
+            fprintf(stderr, "Destination already exists: %s\n", dest_path);
+            failed = 1;
+            continue;
+        }
+        if (errno != ENOENT) {
+            perror("Cannot inspect destination");
+            failed = 1;
+            continue;
+        }
+
         pid_t pid = fork();
         if (pid == 0) {
             execlp("mv", "mv", "-n", "--", buf, dest_path, (char *)0);
