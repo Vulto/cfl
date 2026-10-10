@@ -2,6 +2,7 @@
 #define CFL_PREVIEW_H
 
 #include <ctype.h>
+#include "cfl_core.h"
 int preview_start;     /* column for preview pane start / right scrollbar position */
 int preview_scroll = 0; /* current scroll offset for preview pane (dir listings + text/hex) */
 long preview_total_lines = 0; /* cached total for current text/hex preview (lines or hex-rows) */
@@ -208,6 +209,8 @@ static void ueberzugpp_start_once(void) {
     ueberzug_in = fdopen(pipefd[1], "w");
     if (!ueberzug_in) {
         close(pipefd[1]);
+        kill(ueberzug_pid, SIGTERM);
+        while (waitpid(ueberzug_pid, NULL, 0) < 0 && errno == EINTR) {}
         ueberzug_failed = 1;
         ueberzug_pid = -1;
         return;
@@ -217,8 +220,12 @@ static void ueberzugpp_start_once(void) {
 
 static void ueberzugpp_remove(void) {
     if (!ueberzug_in) return;
-    fprintf(ueberzug_in, "{\"action\":\"remove\",\"identifier\":\"%s\"}\n", UEBERZUGPP_IDENTIFIER);
-    fflush(ueberzug_in);
+
+    char escapedIdentifier[512];
+    if (CflJsonEscape(UEBERZUGPP_IDENTIFIER, escapedIdentifier, sizeof escapedIdentifier) == 0) {
+        fprintf(ueberzug_in, "{\\"action\\":\\"remove\\",\\"identifier\\":\\"%s\\"}\\n", escapedIdentifier);
+        fflush(ueberzug_in);
+    }
     ueberzug_showing = 0;
     ueberzug_last_w = 0;
     ueberzug_last_h = 0;
@@ -258,8 +265,16 @@ static void ueberzugpp_add(const char *img_path) {
     }
 
     if (need_clear) {
-        fprintf(ueberzug_in, "{\"action\":\"remove\",\"identifier\":\"%s\"}\n", UEBERZUGPP_IDENTIFIER);
-        fflush(ueberzug_in);
+        char escapedPath[PATH_MAX * 6 + 1];
+    char escapedIdentifier[512];
+    if (CflJsonEscape(img_path, escapedPath, sizeof escapedPath) != 0 ||
+        CflJsonEscape(UEBERZUGPP_IDENTIFIER, escapedIdentifier, sizeof escapedIdentifier) != 0)
+        return;
+
+    fprintf(ueberzug_in,
+            "{\\"action\\":\\"add\\",\\"identifier\\":\\"%s\\",\\"path\\":\\"%s\\",\\"x\\":%d,\\"y\\":%d,\\"width\\":%d,\\"height\\":%d}\\n",
+            escapedIdentifier, escapedPath, x, y, w, h);
+    fflush(ueberzug_in);
         /* keep showing=false until add succeeds; dims updated below */
         ueberzug_showing = 0;
         ueberzug_last_w = 0;
@@ -290,7 +305,7 @@ static void ueberzugpp_stop(void) {
     }
     if (ueberzug_pid > 0) {
         kill(ueberzug_pid, SIGTERM);
-        waitpid(ueberzug_pid, NULL, WNOHANG);
+        while (waitpid(ueberzug_pid, NULL, 0) < 0 && errno == EINTR) {}
         ueberzug_pid = -1;
     }
 }
