@@ -1,6 +1,7 @@
 #ifndef CFL_CORE_H
 #define CFL_CORE_H
 
+#include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
 
@@ -13,8 +14,12 @@ static inline int CflBuildPath(char *dst, size_t dstSize,
     if (dst == NULL || dstSize == 0 || base == NULL || entry == NULL)
         return -1;
 
+    size_t baseLen = 0;
+    while (base[baseLen] != '\0')
+        ++baseLen;
+
     int written;
-    if (base[0] == '/' && base[1] == '\0')
+    if (baseLen > 0 && base[baseLen - 1] == '/')
         written = snprintf(dst, dstSize, "%s%s", base, entry);
     else
         written = snprintf(dst, dstSize, "%s/%s", base, entry);
@@ -79,7 +84,8 @@ static inline int CflReadLine(FILE *stream, char *dst, size_t dstSize) {
     if (stream == NULL || dst == NULL || dstSize < 2)
         return -1;
 
-    if (fgets(dst, (int)(dstSize > 2147483647u ? 2147483647u : dstSize), stream) == NULL) {
+    int readSize = dstSize > (size_t)INT_MAX ? INT_MAX : (int)dstSize;
+    if (fgets(dst, readSize, stream) == NULL) {
         dst[0] = '\0';
         return 0;
     }
@@ -88,16 +94,23 @@ static inline int CflReadLine(FILE *stream, char *dst, size_t dstSize) {
     while (dst[len] != '\0')
         ++len;
 
-    if (len > 0 && dst[len - 1] == '\n')
-        dst[--len] = '\0';
-    else if (!feof(stream)) {
-        int ch;
-        while ((ch = fgetc(stream)) != '\n' && ch != EOF) {}
-        dst[0] = '\0';
-        return -1;
+    if (len > 0 && dst[len - 1] == '\n') {
+        dst[len - 1] = '\0';
+        return 1;
     }
 
-    return 1;
+    if (feof(stream))
+        return 1;
+
+    /* A full buffer may still represent an exactly-sized line. */
+    int ch = fgetc(stream);
+    if (ch == '\n' || ch == EOF)
+        return 1;
+
+    while (ch != '\n' && ch != EOF)
+        ch = fgetc(stream);
+    dst[0] = '\0';
+    return -1;
 }
 
 #endif
