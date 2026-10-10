@@ -20,7 +20,22 @@ static void FreeEntries(char **entries, int count) {
     free(entries);
 }
 
+static void TestParentPath(void) {
+    char absolute[] = "/tmp/example";
+    getParentPath(absolute);
+    assert(strcmp(absolute, "/tmp") == 0);
+
+    char rootPath[] = "/";
+    getParentPath(rootPath);
+    assert(strcmp(rootPath, "/") == 0);
+
+    char relative[] = "example";
+    getParentPath(relative);
+    assert(strcmp(relative, ".") == 0);
+}
+
 int main(void) {
+    TestParentPath();
     char root[] = "/tmp/cfl-test-XXXXXX";
     assert(mkdtemp(root) != NULL);
 
