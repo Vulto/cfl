@@ -1220,34 +1220,31 @@ static int trash_write_info(int fd, const char *orig_path) {
 
 /* Move (or copy+delete on EXDEV) src into dest path. */
 static int trash_place_file(const char *src, const char *dest) {
-	if (rename(src, dest) == 0)
-		return 0;
-	if (errno != EXDEV)
-		return -1;
+    if (rename(src, dest) == 0)
+        return 0;
+    if (errno != EXDEV)
+        return -1;
 
-	/* Cross-device: copy then remove */
-	pid_t pid = fork();
-	if (pid < 0) return -1;
-	if (pid == 0) {
-		execlp("cp", "cp", "-a", src, dest, (char *)NULL);
-		_exit(127);
-	}
-	int status = 0;
-	waitpid(pid, &status, 0);
-	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-		return -1;
+    pid_t pid = fork();
+    if (pid < 0)
+        return -1;
+    if (pid == 0) {
+        execlp("cp", "cp", "-a", "--", src, dest, (char *)NULL);
+        _exit(127);
+    }
+    if (cfl_wait_child(pid) != 0)
+        return -1;
 
-	pid = fork();
-	if (pid < 0) {
-		/* Leave the copy in trash rather than lose both */
-		return 0;
-	}
-	if (pid == 0) {
-		execlp("rm", "rm", "-rf", src, (char *)NULL);
-		_exit(127);
-	}
-	waitpid(pid, &status, 0);
-	return 0;
+    pid = fork();
+    if (pid < 0)
+        return 1; /* Keep the complete trash copy and its metadata. */
+    if (pid == 0) {
+        execlp("rm", "rm", "-rf", "--", src, (char *)NULL);
+        _exit(127);
+    }
+    if (cfl_wait_child(pid) != 0)
+        return 1; /* Source removal may be partial; keep the complete copy. */
+    return 0;
 }
 
 /* Trash one absolute path into the FreeDesktop home trash. Returns 0 on success. */
@@ -1284,11 +1281,12 @@ static int trash_one(const char *orig_path) {
 		return -1;
 	}
 
-	if (trash_place_file(orig_path, dest) != 0) {
-		unlink(info_path);
-		return -1;
-	}
-	return 0;
+    int placeResult = trash_place_file(orig_path, dest);
+    if (placeResult < 0) {
+        unlink(info_path);
+        return -1;
+    }
+    return placeResult;
 }
 
 /* Move clipboard selection into FreeDesktop Trash (not a raw dump folder). */
@@ -1311,13 +1309,18 @@ void trashFiles(void) {
 	int readResult;
 	while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
 		CflDecodePath(buf);
-		if (trash_one(buf) == 0) {
-			printf("Trashed: %s\n", buf);
-			ok++;
-		} else {
-			perror(buf);
-			fail++;
-		}
+        int trashResult = trash_one(buf);
+        if (trashResult >= 0) {
+            printf("Trashed: %s\n", buf);
+            ok++;
+            if (trashResult > 0) {
+                fprintf(stderr, "Source could not be fully removed; retained a recoverable trash copy: %s\n", buf);
+                fail++;
+            }
+        } else {
+            perror(buf);
+            fail++;
+        }
     }
     if (readResult < 0)
         fail++;
