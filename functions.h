@@ -1501,14 +1501,21 @@ void prevPage(void) {
 }
 
 void goForward(void) {
-	if(len_preview != -1){
-		snprintf(dir, sizeof(dir), "%s", next_dir);
-		selection = 0;
-		start = 0;
-	} else {
-		openFile(next_dir);
-		clearFlag = 1;
-	}
+    if (isDirectory(next_dir)) {
+        if (len_preview < 0) {
+            displayAlert("Cannot read directory");
+            return;
+        }
+        if (snprintf(dir, sizeof dir, "%s", next_dir) >= (int)sizeof dir) {
+            displayAlert("Directory path too long");
+            return;
+        }
+        selection = 0;
+        start = 0;
+    } else {
+        openFile(next_dir);
+        clearFlag = 1;
+    }
 }
 
 void goBack(void) {
