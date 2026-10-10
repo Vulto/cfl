@@ -80,6 +80,7 @@ int isDirectory(const char *path);
 int getFiles(char *directory, char ***target);
 void sortFiles(char **files, int count, const char *directory);
 int getWritePermissions(char *path);
+int getParentWritePermissions(const char *path);
 void moveFiles(char *present_dir);
 void copyFiles(char *present_dir);
 void trashFiles(void);
@@ -768,6 +769,28 @@ int getWritePermissions(char *path) {
     return (access(path, W_OK) == 0) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
+int getParentWritePermissions(const char *path) {
+    if (path == NULL || path[0] == '\0')
+        return EXIT_SUCCESS;
+
+    char parent[PATH_MAX];
+    size_t len = strlen(path);
+    if (len >= sizeof parent)
+        return EXIT_SUCCESS;
+    memcpy(parent, path, len + 1);
+
+    char *slash = strrchr(parent, '/');
+    if (slash == NULL) {
+        memcpy(parent, ".", 2);
+    } else if (slash == parent) {
+        parent[1] = '\0';
+    } else {
+        *slash = '\0';
+    }
+
+    return access(parent, W_OK | X_OK) == 0 ? EXIT_FAILURE : EXIT_SUCCESS;
+}
+
 static int cfl_wait_child(pid_t pid) {
     int status;
     pid_t waited;
@@ -839,7 +862,7 @@ void removeFiles(void) {
             continue;
         CflDecodePath(buf);
 
-        int flag = getWritePermissions(buf) == 1 ? 0 : 1;
+        int flag = getParentWritePermissions(buf) == 1 ? 0 : 1;
         pid_t pid = fork();
         if (pid == 0) {
             if (flag == 0)
