@@ -566,8 +566,9 @@ static int CflSelectionCacheLoad(void) {
         return -1;
     }
 
-    qsort(CflSelectionCache.items, CflSelectionCache.count,
-          sizeof *CflSelectionCache.items, CflCompareSelectionStrings);
+    if (CflSelectionCache.count > 1)
+        qsort(CflSelectionCache.items, CflSelectionCache.count,
+              sizeof *CflSelectionCache.items, CflCompareSelectionStrings);
 
     struct stat after;
     if (stat(clipboard_path, &after) != 0 ||
