@@ -22,7 +22,7 @@ int main(int argc, char* argv[]) {
         }
 
         if( len > 0 ) {
-            qsort(directories, len, sizeof (char*), compare);
+            sortFiles(directories, len, dir);
         }
 
         if(selection > len-1) {
@@ -135,7 +135,7 @@ int main(int argc, char* argv[]) {
                     displayAlert("Path too long");
                     exit(1);
                 }
-                qsort(next_directories, len_preview, sizeof(char *), compare);
+                sortFiles(next_directories, len_preview, next_dir);
             }
         }
 
