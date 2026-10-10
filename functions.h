@@ -42,7 +42,6 @@ int allocSize;
 char next_dir  [PATH_MAX];
 char prev_dir  [PATH_MAX];
 char temp_dir  [PATH_MAX];
-char sort_dir  [PATH_MAX];
 
 char* editor = NULL;
 char* shell = NULL;
@@ -79,7 +78,6 @@ int isDirectory(const char *path);
 
 /* Forward decls needed by search.h / delete_search.h / jump_to.h (implemented below) */
 int getFiles(char *directory, char ***target);
-int compare(const void *a, const void *b);
 void sortFiles(char **files, int count, const char *directory);
 int getWritePermissions(char *path);
 void moveFiles(char *present_dir);
@@ -213,21 +211,6 @@ void sortFiles(char **files, int count, const char *directory) {
     free(entries);
 }
 
-int compare (const void * a, const void * b ) {
-	char temp_filepath1[PATH_MAX];
-	char temp_filepath2[PATH_MAX];
-
-	snprintf(temp_filepath1, sizeof(temp_filepath1), "%s/%s", sort_dir, *(char **)a);
-	snprintf(temp_filepath2, sizeof(temp_filepath2), "%s/%s", sort_dir, *(char **)b);
-
-	int is_dir1 = (isDirectory(temp_filepath1));
-	int is_dir2 = (isDirectory(temp_filepath2));
-
-	if (is_dir1 != is_dir2) {
-		return is_dir2 - is_dir1;
-	}
-	return strcasecmp(*(char **)a, *(char **)b);
-}
 
 void handleFlags(char** directories) {
 	if(clearFlag == 1){
