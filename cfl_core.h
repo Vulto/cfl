@@ -141,7 +141,7 @@ static inline int CflReadLine(FILE *stream, char *dst, size_t dstSize) {
     int readSize = dstSize > (size_t)INT_MAX ? INT_MAX : (int)dstSize;
     if (fgets(dst, readSize, stream) == NULL) {
         dst[0] = '\0';
-        return 0;
+        return ferror(stream) ? -1 : 0;
     }
 
     size_t len = 0;
