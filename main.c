@@ -145,9 +145,12 @@ int main(int argc, char* argv[]) {
                 exit(1);
             }
 
-            len_preview = getFiles(next_dir, &next_directories);
-            if (len_preview > 0) {
-                sortFiles(next_directories, len_preview, next_dir);
+            if (isDirectory(next_dir)) {
+                len_preview = getFiles(next_dir, &next_directories);
+                if (len_preview > 0)
+                    sortFiles(next_directories, len_preview, next_dir);
+            } else {
+                len_preview = -1;
             }
         }
 
