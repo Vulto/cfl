@@ -12,7 +12,7 @@ static void TestBuildPath(void) {
     assert(CflBuildPath(path, sizeof path, "/tmp", "file name") == 0);
     assert(strcmp(path, "/tmp/file name") == 0);
     assert(CflBuildPath(path, sizeof path, "/tmp/", "file") == 0);
-    assert(strcmp(path, "/tmp//file") == 0);
+    assert(strcmp(path, "/tmp/file") == 0);
 
     assert(CflBuildPath(path, 5, "/tmp", "file") == -1);
     assert(path[0] == '\0');
@@ -52,6 +52,15 @@ static void TestReadLine(void) {
     assert(CflReadLine(stream, line, sizeof line) == 1);
     assert(strcmp(line, "last") == 0);
     assert(CflReadLine(stream, line, sizeof line) == 0);
+    fclose(stream);
+
+    stream = tmpfile();
+    assert(stream != NULL);
+    assert(fputs("1234\\n", stream) >= 0);
+    rewind(stream);
+    char exact[5];
+    assert(CflReadLine(stream, exact, sizeof exact) == 1);
+    assert(strcmp(exact, "1234") == 0);
     fclose(stream);
 
     stream = tmpfile();
