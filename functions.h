@@ -27,6 +27,7 @@
 #include <errno.h>
 
 #include "config.h"
+#include "cfl_core.h"
 #include "ui.h"
 
 sigset_t x;
@@ -61,14 +62,7 @@ char *path;
 FILE *fp;
 
 static int build_path(char *dst, size_t dstsz, const char *base, const char *entry) {
-    /* Avoid "//" when base is root. Returns 0 on success, -1 if truncated/error. */
-    int n;
-    if (base != NULL && base[0] == '/' && base[1] == '\0') {
-        n = snprintf(dst, dstsz, "%s%s", base, entry);
-    } else {
-        n = snprintf(dst, dstsz, "%s/%s", base, entry);
-    }
-    return (n < 0 || (size_t)n >= dstsz) ? -1 : 0;
+    return CflBuildPath(dst, dstsz, base, entry);
 }
 
 // Ueberzug++ helpers (declared here because functions.h is included before their definitions)
@@ -547,72 +541,98 @@ int getWritePermissions(char *path) {
     return (access(path, W_OK) == 0) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
-void copyFiles(char *present_dir) {
-	FILE *f = fopen(clipboard_path, "r");
-	char buf[PATH_MAX];
-	int flag;
-	if(f == NULL) {
-		return;
-	}
+static int cfl_wait_child(pid_t pid) {
+    int status;
+    pid_t waited;
 
-	/* Check write access on destination (not necessarily the browsed dir) */
-	if(getWritePermissions(present_dir) == 1) {
-		flag = 0;
-	} else {
-		flag = 1;
-	}
-	endwin();
-	while(fgets(buf, PATH_MAX, (FILE*) f)) {
-		buf[strlen(buf)-1] = '\0';
-		replace(buf,"//","\n");
-		pid_t pid = fork();
-		if(pid == 0) {
-			if(flag == 0) { 
-				execlp("cp", "cp", "-dirv", buf, present_dir, (char *)0);
-			} else {
-				execlp("sudo", "sudo", "cp", "-dirv", buf, present_dir, (char *)0);
-			}
-			exit(1);
-		} else {
-			int status;
-			waitpid(pid, &status, 0);
-		}
-	}
-	refresh();
-	fclose(f);
-	clearClipboard();
+    do {
+        waited = waitpid(pid, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+
+    if (waited < 0)
+        return -1;
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        return -1;
+    return 0;
 }
 
-void removeFiles(void){
-	FILE *f = fopen(clipboard_path, "r");
-	char buf[PATH_MAX];
-	int flag;
-	if(f == NULL){
-		return;
-	}
-	endwin();
-	while(fgets(buf, PATH_MAX, (FILE*) f)){
-		buf[strlen(buf)-1] = '\0';
-		replace(buf,"//","\n");
-		if( getWritePermissions(buf) == 1 )
-			flag = 0;
-		else
-			flag = 1;
-		pid_t pid = fork();
-		if(pid == 0) {
-			if( flag == 0 ) 
-				execlp("rm", "rm", "-rfv", buf, (char *)0);
-			else
-				execlp("sudo", "sudo", "rm", "-rfv", buf, (char *)0);
-			exit(1);
-		}else{
-			int status;
-			waitpid(pid, &status, 0);
-		}
-	}
-	refresh();
-	fclose(f);
-	clearClipboard();
+void copyFiles(char *present_dir) {
+    FILE *f = fopen(clipboard_path, "r");
+    char buf[PATH_MAX];
+    int flag;
+    int failed = 0;
+
+    if (f == NULL)
+        return;
+
+    flag = getWritePermissions(present_dir) == 1 ? 0 : 1;
+    endwin();
+
+    int readResult;
+    while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
+        if (buf[0] == '\0')
+            continue;
+        replace(buf, "//", "\n");
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            if (flag == 0)
+                execlp("cp", "cp", "-dirv", "--", buf, present_dir, (char *)0);
+            else
+                execlp("sudo", "sudo", "cp", "-dirv", "--", buf, present_dir, (char *)0);
+            _exit(127);
+        }
+        if (pid < 0 || cfl_wait_child(pid) != 0)
+            failed = 1;
+    }
+    if (readResult < 0)
+        failed = 1;
+
+    fclose(f);
+    refresh();
+    if (!failed)
+        clearClipboard();
+    else
+        displayAlert("One or more copy operations failed; selection retained");
+}
+
+void removeFiles(void) {
+    FILE *f = fopen(clipboard_path, "r");
+    char buf[PATH_MAX];
+    int failed = 0;
+
+    if (f == NULL)
+        return;
+
+    endwin();
+
+    int readResult;
+    while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
+        if (buf[0] == '\0')
+            continue;
+        replace(buf, "//", "\n");
+
+        int flag = getWritePermissions(buf) == 1 ? 0 : 1;
+        pid_t pid = fork();
+        if (pid == 0) {
+            if (flag == 0)
+                execlp("rm", "rm", "-rfv", "--", buf, (char *)0);
+            else
+                execlp("sudo", "sudo", "rm", "-rfv", "--", buf, (char *)0);
+            _exit(127);
+        }
+        if (pid < 0 || cfl_wait_child(pid) != 0)
+            failed = 1;
+    }
+    if (readResult < 0)
+        failed = 1;
+
+    fclose(f);
+    refresh();
+    if (!failed)
+        clearClipboard();
+    else
+        displayAlert("One or more delete operations failed; selection retained");
 }
 
 void renameFiles(char **directories){
