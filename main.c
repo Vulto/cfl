@@ -198,11 +198,19 @@ int main(int argc, char* argv[]) {
                     displayAlert("Path too long");
                     break;
                 }
-                char *temp = strdup(temp_dir);
-                if(temp == NULL){ displayAlert("Couldn't allocate memory!"); exit(1); }
-                if (checkClipboard(temp_dir) == 1) { removeClipboard(replace(temp,"\n","//")); selectedFiles--; }
-                else { writeClipboard(replace(temp,"\n","//")); selectedFiles++; }
-                free(temp);
+                char *encoded = replace_alloc(temp_dir, "\n", "//");
+                if (encoded == NULL) {
+                    displayAlert("Couldn't encode selected path");
+                    break;
+                }
+                if (checkClipboard(temp_dir) == 1) {
+                    removeClipboard(encoded);
+                    if (selectedFiles > 0) selectedFiles--;
+                } else {
+                    writeClipboard(encoded);
+                    selectedFiles++;
+                }
+                free(encoded);
                 scrollDown();
                 break;
             }
