@@ -409,7 +409,7 @@ void init(int argc, char* argv[]) {
     snprintf(cache_path, (size_t)allocSize + 1, "%s/cfl", configHome);
 
     if (stat(cache_path, &st) != 0) {
-        if (errno != ENOENT || mkdir(cache_path, 0700) != 0 && errno != EEXIST) {
+        if (errno != ENOENT || (mkdir(cache_path, 0700) != 0 && errno != EEXIST)) {
             perror("Cannot create CFL configuration directory");
             exit(EXIT_FAILURE);
         }
