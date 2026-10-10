@@ -434,100 +434,27 @@ int fileExists(char *file) {
     return (access(file, F_OK) != -1) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
-char *replace(char *str, char *a, char *b) {
-    if (str == NULL || a == NULL || b == NULL || a[0] == '\0')
-        return str;
-
-    size_t needleLen = strlen(a);
-    size_t replacementLen = strlen(b);
-    if (replacementLen > needleLen)
-        return NULL;
-
-    char *readPos = str;
-    char *writePos = str;
-    while (*readPos != '\0') {
-        if (strncmp(readPos, a, needleLen) == 0) {
-            memcpy(writePos, b, replacementLen);
-            writePos += replacementLen;
-            readPos += needleLen;
-        } else {
-            *writePos++ = *readPos++;
-        }
-    }
-    *writePos = '\0';
-    return str;
-}
-
-/* Allocate a correctly sized result when replacement can expand the input. */
-static char *replace_alloc(const char *str, const char *a, const char *b) {
-    if (str == NULL || a == NULL || b == NULL || a[0] == '\0')
-        return NULL;
-
-    size_t sourceLen = strlen(str);
-    size_t needleLen = strlen(a);
-    size_t replacementLen = strlen(b);
-    size_t matches = 0;
-    const char *scan = str;
-
-    while ((scan = strstr(scan, a)) != NULL) {
-        ++matches;
-        scan += needleLen;
-    }
-
-    if (replacementLen > needleLen &&
-        matches > (SIZE_MAX - sourceLen - 1) / (replacementLen - needleLen))
-        return NULL;
-
-    size_t resultLen = sourceLen;
-    if (replacementLen >= needleLen)
-        resultLen += matches * (replacementLen - needleLen);
-    else
-        resultLen -= matches * (needleLen - replacementLen);
-
-    char *result = malloc(resultLen + 1);
-    if (result == NULL)
-        return NULL;
-
-    const char *readPos = str;
-    char *writePos = result;
-    const char *match;
-    while ((match = strstr(readPos, a)) != NULL) {
-        size_t prefixLen = (size_t)(match - readPos);
-        memcpy(writePos, readPos, prefixLen);
-        writePos += prefixLen;
-        memcpy(writePos, b, replacementLen);
-        writePos += replacementLen;
-        readPos = match + needleLen;
-    }
-    strcpy(writePos, readPos);
-    return result;
-}
-
 int checkClipboard(char *filepath) {
     if (filepath == NULL || clipboard_path == NULL)
+        return 0;
+
+    char encoded[PATH_MAX * 3 + 1];
+    if (CflEncodePath(filepath, encoded, sizeof encoded) != 0)
         return 0;
 
     FILE *f = fopen(clipboard_path, "r");
     if (f == NULL)
         return 0;
 
-    char buf[PATH_MAX * 2 + 1];
-    char *encoded = replace_alloc(filepath, "\n", "//");
-    if (encoded == NULL) {
-        fclose(f);
-        return 0;
-    }
-
+    char buf[PATH_MAX * 3 + 1];
     int readResult;
     while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
         if (strcmp(encoded, buf) == 0) {
-            free(encoded);
             fclose(f);
             return 1;
         }
     }
 
-    free(encoded);
     fclose(f);
     return 0;
 }
@@ -557,7 +484,7 @@ void removeClipboard(char *filepath) {
         return;
     }
 
-    char buf[PATH_MAX * 2 + 1];
+    char buf[PATH_MAX * 3 + 1];
     int failed = 0;
     int readResult;
     while ((readResult = CflReadLine(f1, buf, sizeof buf)) > 0) {
@@ -603,7 +530,9 @@ void selectAllFiles(char **directories, int n) {
 			continue;
 		if (checkClipboard(path) == 1)
 			continue;
-        char *encoded = replace_alloc(path, "\n", "//");
+        char encoded[PATH_MAX * 3 + 1];
+        if (CflEncodePath(path, encoded, sizeof encoded) != 0)
+            continue;
         if (encoded == NULL)
             continue;
         writeClipboard(encoded);
@@ -657,7 +586,7 @@ void copyFiles(char *present_dir) {
     while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
         if (buf[0] == '\0')
             continue;
-        replace(buf, "//", "\n");
+        CflDecodePath(buf);
 
         pid_t pid = fork();
         if (pid == 0) {
@@ -683,7 +612,7 @@ void copyFiles(char *present_dir) {
 
 void removeFiles(void) {
     FILE *f = fopen(clipboard_path, "r");
-    char buf[PATH_MAX];
+    char buf[PATH_MAX * 3 + 1];
     int failed = 0;
 
     if (f == NULL)
@@ -695,7 +624,7 @@ void removeFiles(void) {
     while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
         if (buf[0] == '\0')
             continue;
-        replace(buf, "//", "\n");
+        CflDecodePath(buf);
 
         int flag = getWritePermissions(buf) == 1 ? 0 : 1;
         pid_t pid = fork();
@@ -723,7 +652,11 @@ void removeFiles(void) {
 void renameFiles(char **directories){
 	if( access( clipboard_path, F_OK ) == -1 ){
 		snprintf(temp_dir, sizeof(temp_dir), "%s/%s", dir, directories[selection]);
-        char *encoded = replace_alloc(temp_dir, "\n", "//");
+        char encoded[PATH_MAX * 3 + 1];
+        if (CflEncodePath(temp_dir, encoded, sizeof encoded) != 0) {
+            displayAlert("Couldn't encode selected path");
+            return;
+        }
         if (encoded == NULL) {
             displayAlert("Couldn't encode selected path");
             return;
@@ -784,8 +717,8 @@ void renameFiles(char **directories){
 				if(buf2[strlen(buf2)-1] == '\n')
 					buf2[strlen(buf2)-1] = '\0';
 
-				replace(buf2,"//","\n");
-				replace(buf,"//","\n");
+				CflDecodePath(buf2);
+				CflDecodePath(buf);
 
 				pid = fork();
 				if( pid == 0 ) {
@@ -810,7 +743,7 @@ void renameFiles(char **directories){
 
 void moveFiles(char *present_dir) {
 	FILE *f = fopen(clipboard_path, "r");
-	char buf[PATH_MAX];
+	char buf[PATH_MAX * 3 + 1];
 	char dest_path[PATH_MAX];
 
 	if (f == NULL) {
@@ -822,7 +755,7 @@ void moveFiles(char *present_dir) {
 	while (fgets(buf, PATH_MAX, f)) {
 		// Remove the newline character
 		buf[strlen(buf) - 1] = '\0';
-		replace(buf, "//", "\n");
+		CflDecodePath(buf);
 
 		// Construct the destination path
 		const char *base = strrchr(buf, '/');
@@ -1066,12 +999,10 @@ void trashFiles(void) {
 
 	endwin();
 	int ok = 0, fail = 0;
-	char buf[PATH_MAX];
-	while (fgets(buf, PATH_MAX, f)) {
-		size_t L = strlen(buf);
-		if (L > 0 && buf[L - 1] == '\n')
-			buf[L - 1] = '\0';
-		replace(buf, "//", "\n");
+	char buf[PATH_MAX * 3 + 1];
+	int readResult;
+	while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
+		CflDecodePath(buf);
 		if (trash_one(buf) == 0) {
 			printf("Trashed: %s\n", buf);
 			ok++;
