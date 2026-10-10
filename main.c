@@ -233,7 +233,7 @@ int main(int argc, char* argv[]) {
                 break;
 			case '?': help(stdscr); break;
             case KEY_EMPTYSEL: clearClipboard(); setSelectionCount(); break;
-            case KEY_RELOAD: reloadDirectory = 1; break;
+            case KEY_UPDATE: reloadDirectory = 1; break;
             case KEY_PASTE: copyFiles(dir); reloadDirectory = 1; break;
             case KEY_MV: moveFiles(dir); reloadDirectory = 1; break;
             case KEY_MOVETO:
