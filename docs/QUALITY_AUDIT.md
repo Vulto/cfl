@@ -85,6 +85,38 @@ The GitHub Actions workflow builds the application, runs both test binaries, and
 - UI: tiny terminals, resize, invalid selection, empty lists, and rapid navigation.
 - Previews: binary/text boundary, huge files, malformed image headers, paths with quotes/backslashes, and preview process termination.
 
+## Feature comparison
+
+This is a capability-level comparison based on the projects' upstream documentation, not a claim that every optional plugin or user configuration has been tested.
+
+| Capability | CFL | nnn | fff (dylanaraps) | ranger | lf | superfile |
+|---|---|---|---|---|---|---|
+| Dual pane / simultaneous panels | Dual pane | Multiple contexts; plugin-driven workflows | Multiple contexts | Multi-column view and tabs | Single main view; intentionally omits tabs/windows | Multiple panels |
+| Directory listing and navigation | Yes | Yes | Yes | Yes | Yes | Yes |
+| Text / binary preview | Text and hex | External/plugin workflows | Text preview | Extensive external preview pipeline | Configurable preview filters | Preview support |
+| Image preview | Optional Überzugpp | Plugin/external integration | Optional w3m-img | External preview backends | Not a core feature in its documented design | Yes |
+| Fuzzy/filter search | Current-directory fuzzy search | Search/filter and plugins | Instant name filtering | Search/filter | Filtering and custom commands | Search |
+| Multi-selection and batch operations | Yes | Yes | Yes | Yes | Shell-oriented commands | Yes |
+| Bookmarks | Yes | Yes | Yes | Yes | Typically configured/custom commands | Workflow/navigation features |
+| FreeDesktop trash integration | Built in | Depends on workflow/plugins | External tools | Depends on configuration | External tools | File-operation workflow |
+| File metadata panel | Image/video details | Plugin workflows | Basic preview workflow | Preview pipeline | Preview filters | File inspection/preview |
+| Plugin / extension model | External scripts; no mature plugin API | Large plugin ecosystem | Minimalist design | Mature Python plugins | Custom commands | Plugin support |
+| Asynchronous long operations | No; operations can block UI | Operation support varies by workflow | Not a current design strength | Depends on operation/tool | Explicit async command support | Operation UI support |
+| Cross-platform | Linux/POSIX-oriented | Linux, macOS, BSD and others | Shell-supported Unix platforms | Unix-like platforms | Linux, macOS, BSD, Windows | Linux, macOS, Windows |
+| Low dependency footprint | ncursesw, libmagic; optional preview tools | Small core; plugins optional | Bash and coreutils | Python plus optional preview tools | Single binary; no runtime dependency on Unix | Go-based binary |
+
+### What CFL should adopt
+
+- Keep the small C core and avoid embedding a general-purpose plugin runtime.
+- Preserve its strong dual-pane and preview workflow.
+- Adopt nnn's low-overhead approach to common operations and optional extensions.
+- Adopt lf's non-blocking execution model for long-running commands, while keeping the UI responsive.
+- Adopt ranger's robust opener/preview integration patterns without making previews depend on many mandatory tools.
+- Adopt superfile's discoverability and multi-panel workflow ideas only where they improve the keyboard-first interaction.
+- Keep fff's focus on quick navigation and minimal dependencies.
+
+Feature parity should not be pursued blindly. Every feature needs tests, bounded resource use, predictable failure behavior, and a measurable reason to exist.
+
 ## Performance comparison and design lessons
 
 The following are upstream project references, not benchmark claims:
