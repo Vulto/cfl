@@ -1585,19 +1585,24 @@ void getLastToken(char *tokenizer) {
     }
 }
 
-void goShell(pid_t pid) {
-	pid = fork();
-	if( pid == 0 ) {
-		chdir(dir);
-		execlp(shell, shell, (char *)0);
-		exit(1);
-	} else {
-		int status;
-		waitpid(pid, &status, 0);
-	}
-
-	start = 0;
-	selection = 0;
+void goShell(pid_t ignoredPid) {
+    (void)ignoredPid;
+    pid_t pid = fork();
+    if (pid == 0) {
+        if (chdir(dir) != 0) {
+            perror("Cannot enter current directory in shell");
+            _exit(126);
+        }
+        execlp(shell, shell, (char *)0);
+        perror("Cannot launch shell");
+        _exit(127);
+    }
+    if (pid < 0) {
+        perror("Cannot fork shell");
+        return;
+    }
+    if (cfl_wait_child(pid) != 0)
+        fprintf(stderr, "Shell exited with an error\n");
 }
 
 void Deleting(void) {
