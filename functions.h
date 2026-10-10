@@ -228,22 +228,24 @@ void handleFlags(char** directories) {
 		clearFlagImg = 0;
 	}
 
-	if(searchFlag == 1){
-		searchFlag = 0;
-		last[strlen(last)-1] = '\0';
-		for(i=0; i<len; i++)
-			if(strcmp(directories[i],last) == 0) {
-				selection = i;
-				break;
-			}
-		if(len > maxy){
-			if(selection > maxy-3)
-				start = selection - maxy + 3;
-		}
-
-		endwin();
-		refresh();
-	}
+    if (searchFlag == 1) {
+        searchFlag = 0;
+        if (last != NULL) {
+            size_t lastLen = strlen(last);
+            if (lastLen > 0 && last[lastLen - 1] == '\n')
+                last[lastLen - 1] = '\0';
+            for (i = 0; i < len; ++i) {
+                if (strcmp(directories[i], last) == 0) {
+                    selection = i;
+                    break;
+                }
+            }
+        }
+        if (len > maxy && selection > maxy - 3)
+            start = selection - maxy + 3;
+        endwin();
+        refresh();
+    }
 
 	if(backFlag == 1){
 		backFlag = 0;
@@ -1565,17 +1567,20 @@ void goMID(void) {
 
 /* Gets the last token from temp_dir by using `tokenizer` as a delimeter */
 void getLastToken(char *tokenizer) {
-	pch = strtok(temp_dir, tokenizer);
-	while (pch != NULL) {
-		free(last);
-		last = strdup(pch);
-		if(last == NULL) {
-			endwin();
-			printf("%s\n", "Couldn't allocate memory!");
-			exit(1);
-		}
-		pch = strtok(NULL,tokenizer);
-	}
+    free(last);
+    last = NULL;
+    pch = strtok(temp_dir, tokenizer);
+    while (pch != NULL) {
+        char *next = strdup(pch);
+        if (next == NULL) {
+            endwin();
+            fprintf(stderr, "Couldn't allocate last path component\n");
+            exit(EXIT_FAILURE);
+        }
+        free(last);
+        last = next;
+        pch = strtok(NULL, tokenizer);
+    }
 }
 
 void goShell(pid_t pid) {
