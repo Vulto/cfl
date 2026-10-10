@@ -158,8 +158,10 @@ static inline int CflReadLine(FILE *stream, char *dst, size_t dstSize) {
 
     /* A full buffer may still represent an exactly-sized line. */
     int ch = fgetc(stream);
-    if (ch == '\n' || ch == EOF)
+    if (ch == '\n')
         return 1;
+    if (ch == EOF)
+        return ferror(stream) ? -1 : 1;
 
     while (ch != '\n' && ch != EOF)
         ch = fgetc(stream);
