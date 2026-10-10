@@ -33,6 +33,8 @@ This audit prioritizes memory safety, filesystem correctness, deterministic beha
 
 - Directory type is now determined once per item before sorting. The previous comparator performed filesystem metadata queries during each sort comparison, causing repeated `stat()` calls on the same entries.
 - Selection membership now uses a cached sorted in-memory index and binary search instead of reopening and linearly scanning the selection file for every displayed row.
+- The directory listing is retained between keypresses and reloaded after directory changes, filesystem mutations, shell return, hidden-file toggles, or the documented refresh key. This avoids rescanning and sorting the current directory for every cursor movement.
+- Preview line-count/scroll caches are invalidated when the directory is refreshed, avoiding stale previews after external edits.
 - Window recreation now frees old ncurses windows; undersized terminals and failed window allocation are handled without dereferencing null windows.
 - Parent-path handling now tolerates relative paths and root without null-pointer arithmetic.
 - Delete operations now inspect parent-directory write/execute permissions instead of treating a file's own write bit as permission to unlink it.
