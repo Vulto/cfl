@@ -314,25 +314,31 @@ static void preview_print_message(const char *message, int maxx) {
 }
 
 static int getMIME(const char *filepath, char mime[128]) {
-    magic_t magic = magic_open(MAGIC_MIME_TYPE);
-    if (magic == NULL) {
+    static magic_t cookie = NULL;
+    static int initializationFailed = 0;
+    if (filepath == NULL || mime == NULL || initializationFailed)
         return -1;
+
+    if (cookie == NULL) {
+        cookie = magic_open(MAGIC_MIME_TYPE);
+        if (cookie == NULL) {
+            initializationFailed = 1;
+            return -1;
+        }
+        if (magic_load(cookie, NULL) != 0) {
+            magic_close(cookie);
+            cookie = NULL;
+            initializationFailed = 1;
+            return -1;
+        }
     }
 
-    if (magic_load(magic, NULL) != 0) {
-        magic_close(magic);
+    const char *mimeType = magic_file(cookie, filepath);
+    if (mimeType == NULL)
         return -1;
-    }
 
-    const char *mime_type = magic_file(magic, filepath);
-    if (mime_type == NULL) {
-        magic_close(magic);
-        return -1;
-    }
-
-    snprintf(mime, 128, "%s", mime_type);
-    magic_close(magic);
-    return 0;
+    int written = snprintf(mime, 128, "%s", mimeType);
+    return written < 0 || written >= 128 ? -1 : 0;
 }
 
 /* Fast line counter (called only on preview target change for perf) */
