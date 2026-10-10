@@ -274,19 +274,28 @@ static void delete_search_draw_info(char **files, search_filt *filt, int sel,
     wrefresh(preview_win);
 }
 
-static void delete_one_path(const char *path) {
-    int flag = (getWritePermissions((char *)path) == 1) ? 0 : 1;
+static int delete_one_path(const char *path) {
+    int flag = getParentWritePermissions(path) == 1 ? 0 : 1;
     pid_t pid = fork();
     if (pid == 0) {
         if (flag == 0)
-            execlp("rm", "rm", "-rfv", path, (char *)0);
+            execlp("rm", "rm", "-rfv", "--", path, (char *)0);
         else
-            execlp("sudo", "sudo", "rm", "-rfv", path, (char *)0);
-        exit(1);
-    } else if (pid > 0) {
-        int status;
-        waitpid(pid, &status, 0);
+            execlp("sudo", "sudo", "rm", "-rfv", "--", path, (char *)0);
+        _exit(127);
     }
+    if (pid < 0)
+        return -1;
+
+    int status;
+    pid_t waited;
+    do {
+        waited = waitpid(pid, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+
+    if (waited < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        return -1;
+    return 0;
 }
 
 /* Confirmation dialog: no full-screen backdrop wipe; lists every path to delete.
@@ -454,16 +463,20 @@ static int delete_search_perform(char **files, int n, const unsigned char *marke
     }
 
     endwin();
+    int failed = 0;
     for (int t = 0; t < ntargets; t++) {
         int oidx = targets[t];
         if (oidx < 0 || oidx >= n || !files[oidx]) continue;
         char path[PATH_MAX];
         if (build_path(path, sizeof path, dir, files[oidx]) != 0) continue;
-        delete_one_path(path);
+        if (delete_one_path(path) != 0)
+            failed = 1;
     }
     free(targets);
     refresh();
-    return 1;
+    if (failed)
+        displayAlert("Some selected items could not be deleted");
+    return failed ? 0 : 1;
 }
 
 /* Search-like bulk delete for the current directory listing. */
