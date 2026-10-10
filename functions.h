@@ -247,18 +247,19 @@ void handleFlags(char** directories) {
         refresh();
     }
 
-	if(backFlag == 1){
-		backFlag = 0;
-		for(i=0; i<len; i++)
-			if(strcmp(directories[i],last) == 0) {
-				selection = i;
-				break;
-			}
-		if(len > maxy) {
-			if(selection > maxy-3)
-				start = selection - maxy + 3;
-		}
-	}
+    if (backFlag == 1) {
+        backFlag = 0;
+        if (last != NULL) {
+            for (i = 0; i < len; ++i) {
+                if (strcmp(directories[i], last) == 0) {
+                    selection = i;
+                    break;
+                }
+            }
+        }
+        if (len > maxy && selection > maxy - 3)
+            start = selection - maxy + 3;
+    }
 }
 
 // Moving this function to ui.h requires further refactoring
