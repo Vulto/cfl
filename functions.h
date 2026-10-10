@@ -663,6 +663,8 @@ int checkClipboard(char *filepath) {
 }
 
 void writeClipboard(char *filepath) {
+    if (filepath == NULL || clipboard_path == NULL)
+        return;
     FILE *f = fopen(clipboard_path, "a");
     if (f == NULL) {
         displayAlert("Error accessing selection file");
@@ -681,6 +683,8 @@ void writeClipboard(char *filepath) {
 }
 
 void removeClipboard(char *filepath) {
+    if (filepath == NULL || clipboard_path == NULL || temp_clipboard_path == NULL)
+        return;
     FILE *f1 = fopen(clipboard_path, "r");
     if (f1 == NULL) {
         displayAlert("Couldn't open selection file");
