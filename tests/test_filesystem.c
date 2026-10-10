@@ -43,6 +43,9 @@ int main(void) {
     char filePath[PATH_MAX];
     assert(build_path(filePath, sizeof filePath, root, "alpha") == 0);
     assert(isDirectory(filePath) == 0);
+    assert(chmod(filePath, 0400) == 0);
+    assert(getParentWritePermissions(filePath) == EXIT_FAILURE);
+    assert(chmod(filePath, 0600) == 0);
 
     char linkPath[PATH_MAX];
     assert(build_path(path, sizeof path, root, "folder") == 0);
