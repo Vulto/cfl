@@ -349,8 +349,17 @@ void init(int argc, char* argv[]) {
 
 	setlocale(LC_ALL, "");
 
-	uid_t uid = getuid();
-	info = getpwuid(uid);
+    uid_t uid = getuid();
+    info = getpwuid(uid);
+    const char *homeDir = getenv("HOME");
+    if (homeDir == NULL || homeDir[0] == '\0') {
+        if (info != NULL && homeDir != NULL && homeDir[0] != '\0')
+            homeDir = homeDir;
+        else {
+            fprintf(stderr, "Cannot determine home directory\n");
+            exit(EXIT_FAILURE);
+        }
+    }
 
 	if( getenv("SHELL") == NULL) {
 		shell = malloc(10);
@@ -387,14 +396,14 @@ void init(int argc, char* argv[]) {
 	}
 
 	struct stat st = {0};
-	if( getenv("XDG_CONFIG_HOME") == NULL) {
-		allocSize = snprintf(NULL,0,"%s/.config/cfl",info->pw_dir);
+	if (getenv("XDG_CONFIG_HOME") == NULL || getenv("XDG_CONFIG_HOME")[0] == '\0') {
+		allocSize = snprintf(NULL,0,"%s/.config/cfl",homeDir);
 		cache_path = malloc(allocSize+1);
 		if(cache_path == NULL) {
 			printf("%s\n", "Couldn't initialize cache path");
 			exit(1);
 		}
-		snprintf(cache_path,allocSize+1,"%s/.config/cfl",info->pw_dir);
+		snprintf(cache_path,allocSize+1,"%s/.config/cfl",homeDir);
 	} else {
 		allocSize = snprintf(NULL,0,"%s/cfl",getenv("XDG_CONFIG_HOME"));
 		cache_path = malloc(allocSize+1);
@@ -452,13 +461,13 @@ void init(int argc, char* argv[]) {
 		}
 		snprintf(trash_path, allocSize + 1, "%s/Trash", getenv("XDG_DATA_HOME"));
 	} else {
-		allocSize = snprintf(NULL, 0, "%s/.local/share/Trash", info->pw_dir);
+		allocSize = snprintf(NULL, 0, "%s/.local/share/Trash", homeDir);
 		trash_path = malloc(allocSize + 1);
 		if (trash_path == NULL) {
 			printf("%s\n", "Couldn't initialize trash path");
 			exit(1);
 		}
-		snprintf(trash_path, allocSize + 1, "%s/.local/share/Trash", info->pw_dir);
+		snprintf(trash_path, allocSize + 1, "%s/.local/share/Trash", homeDir);
 	}
 
     char cwd[PATH_MAX];
