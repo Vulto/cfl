@@ -698,12 +698,14 @@ void renameFiles(char **directories){
 		free(cmd);
 	}
 
+    int failed = 0;
     int readResult;
     while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
         count2 = -1;
         f2 = fopen(temp_clipboard_path, "r");
         if (f2 == NULL) {
             displayAlert("Couldn't reopen temporary selection file");
+            failed = 1;
             break;
         }
         int readResult2;
@@ -719,20 +721,28 @@ void renameFiles(char **directories){
                     _exit(127);
                 } else if (pid < 0 || cfl_wait_child(pid) != 0) {
                     displayAlert("Rename operation failed");
+                    failed = 1;
                 }
             }
         }
-        if (readResult2 < 0)
+        if (readResult2 < 0) {
             displayAlert("Invalid line in temporary selection file");
+            failed = 1;
+        }
         count++;
         fclose(f2);
     }
-    if (readResult < 0)
+    if (readResult < 0) {
         displayAlert("Invalid line in selection file");
-	fclose(f);
+        failed = 1;
+    }
+    fclose(f);
 
-	clearClipboard();
-	remove(temp_clipboard_path);
+    if (!failed)
+        clearClipboard();
+    else
+        displayAlert("Some rename operations failed; selection retained");
+    remove(temp_clipboard_path);
 
 	refresh();
 }
@@ -1016,12 +1026,15 @@ void trashFiles(void) {
 			perror(buf);
 			fail++;
 		}
-	}
-	fclose(f);
-	refresh();
-	clearClipboard();
+    }
+    if (readResult < 0)
+        fail++;
+    fclose(f);
+    refresh();
+    if (fail == 0 && ok > 0)
+        clearClipboard();
 
-	if (fail && ok)
+    if (fail && ok)
 		displayAlert("Some items failed to trash");
 	else if (fail && !ok)
 		displayAlert("Trash failed");
