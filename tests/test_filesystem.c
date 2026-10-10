@@ -33,6 +33,13 @@ int main(void) {
     assert(mkdir(path, 0700) == 0);
     assert(isDirectory(path) == 1);
 
+    char extraNames[20][32];
+    for (int i = 0; i < 20; ++i) {
+        snprintf(extraNames[i], sizeof extraNames[i], "entry-%02d", i);
+        assert(build_path(path, sizeof path, root, extraNames[i]) == 0);
+        MakeFile(path);
+    }
+
     char filePath[PATH_MAX];
     assert(build_path(filePath, sizeof filePath, root, "alpha") == 0);
     assert(isDirectory(filePath) == 0);
@@ -51,14 +58,16 @@ int main(void) {
     char **entries = NULL;
     hiddenFlag = 1;
     int count = getFiles(root, &entries);
-    assert(count == 3);
+    assert(count == 23);
     assert(entries != NULL);
+    sortFiles(entries, count, root);
+    assert(strcmp(entries[0], "folder") == 0);
     FreeEntries(entries, count);
 
     entries = NULL;
     hiddenFlag = 0;
     count = getFiles(root, &entries);
-    assert(count == 2);
+    assert(count == 22);
     FreeEntries(entries, count);
 
     assert(build_path(path, sizeof path, root, "folder") == 0);
@@ -76,6 +85,10 @@ int main(void) {
     assert(unlink(path) == 0);
     assert(build_path(path, sizeof path, root, ".hidden") == 0);
     assert(unlink(path) == 0);
+    for (int i = 0; i < 20; ++i) {
+        assert(build_path(path, sizeof path, root, extraNames[i]) == 0);
+        assert(unlink(path) == 0);
+    }
     assert(build_path(path, sizeof path, root, "folder") == 0);
     assert(rmdir(path) == 0);
     assert(rmdir(root) == 0);
