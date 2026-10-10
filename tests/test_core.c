@@ -70,7 +70,7 @@ static void TestReadLine(void) {
 
     stream = tmpfile();
     assert(stream != NULL);
-    assert(fputs("1234\\n", stream) >= 0);
+    assert(fputs("1234\n", stream) >= 0);
     rewind(stream);
     char exact[5];
     assert(CflReadLine(stream, exact, sizeof exact) == 1);
