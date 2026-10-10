@@ -138,6 +138,24 @@ Edit **`config.h`** then recompile:
 
 If `$XDG_CONFIG_HOME` is unset, `$HOME/.config` is used. If `$XDG_DATA_HOME` is unset, `$HOME/.local/share` is used.
 
+## Development and tests
+
+The CI workflow compiles CFL, runs core and filesystem regression tests, and runs both test binaries with AddressSanitizer and UndefinedBehaviorSanitizer.
+
+Run the tests locally:
+
+```sh
+cc -std=c2x -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Wpedantic -Werror \
+  tests/test_core.c -o tests/test_core
+./tests/test_core
+
+cc -std=c2x -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Wpedantic \
+  tests/test_filesystem.c -lncursesw -lmagic -o tests/test_filesystem
+./tests/test_filesystem
+```
+
+See [the quality audit](docs/QUALITY_AUDIT.md) for confirmed fixes, remaining risks, regression coverage, and engineering priorities. Do not merge changes until GitHub Actions passes.
+
 ## Manual page
 
 ```sh
