@@ -84,6 +84,7 @@ int getParentWritePermissions(const char *path);
 void moveFiles(char *present_dir);
 void copyFiles(char *present_dir);
 void trashFiles(void);
+static int cfl_mkdir_p(const char *path, mode_t mode);
 
 #include "search.h"
 #include "delete_search.h"
@@ -397,19 +398,24 @@ void init(int argc, char* argv[]) {
 
     struct stat st = {0};
     const char *configHome = getenv("XDG_CONFIG_HOME");
-    if (configHome == NULL || configHome[0] == '\0')
-        configHome = homeDir;
-
-    allocSize = snprintf(NULL, 0, "%s/cfl", configHome);
-    cache_path = malloc((size_t)allocSize + 1);
+    if (configHome == NULL || configHome[0] == '\0') {
+        allocSize = snprintf(NULL, 0, "%s/.config/cfl", homeDir);
+        cache_path = malloc((size_t)allocSize + 1);
+        if (cache_path != NULL)
+            snprintf(cache_path, (size_t)allocSize + 1, "%s/.config/cfl", homeDir);
+    } else {
+        allocSize = snprintf(NULL, 0, "%s/cfl", configHome);
+        cache_path = malloc((size_t)allocSize + 1);
+        if (cache_path != NULL)
+            snprintf(cache_path, (size_t)allocSize + 1, "%s/cfl", configHome);
+    }
     if (cache_path == NULL) {
         fprintf(stderr, "Couldn't initialize cache path\n");
         exit(EXIT_FAILURE);
     }
-    snprintf(cache_path, (size_t)allocSize + 1, "%s/cfl", configHome);
 
     if (stat(cache_path, &st) != 0) {
-        if (errno != ENOENT || (mkdir(cache_path, 0700) != 0 && errno != EEXIST)) {
+        if (errno != ENOENT || cfl_mkdir_p(cache_path, 0700) != 0) {
             perror("Cannot create CFL configuration directory");
             exit(EXIT_FAILURE);
         }
@@ -422,7 +428,6 @@ void init(int argc, char* argv[]) {
         fprintf(stderr, "CFL configuration path is not a directory: %s\n", cache_path);
         exit(EXIT_FAILURE);
     }
-
 	/* Remove legacy shared clipboard (pre session-local selection) */
 	{
 		char legacy_clipboard[PATH_MAX];
@@ -1112,7 +1117,7 @@ void moveFiles(char *present_dir) {
 
 /* ---------- FreeDesktop Trash (home trash) ---------- */
 
-static int trash_mkdir_p(const char *path, mode_t mode) {
+static int cfl_mkdir_p(const char *path, mode_t mode) {
 	char tmp[PATH_MAX];
 	if (snprintf(tmp, sizeof tmp, "%s", path) >= (int)sizeof tmp)
 		return -1;
@@ -1138,7 +1143,7 @@ static int trash_mkdir_p(const char *path, mode_t mode) {
 /* Ensure $trash, $trash/files, $trash/info exist (0700). Returns 0 on success. */
 static int trash_ensure_home(void) {
 	if (!trash_path) return -1;
-	if (trash_mkdir_p(trash_path, 0700) != 0)
+	if (cfl_mkdir_p(trash_path, 0700) != 0)
 		return -1;
 
 	char files_dir[PATH_MAX], info_dir[PATH_MAX];
