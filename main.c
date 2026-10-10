@@ -62,7 +62,7 @@ int main(int argc, char* argv[]) {
                 else wattron(current_win, A_DIM);
             }
 
-            if (isRegularFile(temp_dir) == 0)
+            if (isDirectory(temp_dir))
                 wattron(current_win, A_BOLD);
 
             wmove(current_win, t, 2);
