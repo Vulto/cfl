@@ -15,12 +15,6 @@ int main(int argc, char* argv[]) {
         }
         len = filled;
 
-        allocSize = snprintf(NULL, 0, "%s", dir);
-        if (snprintf(sort_dir, sizeof sort_dir, "%s", dir) >= (int)sizeof sort_dir) {
-            displayAlert("Path too long");
-            exit(1);
-        }
-
         if( len > 0 ) {
             sortFiles(directories, len, dir);
         }
@@ -114,7 +108,6 @@ int main(int argc, char* argv[]) {
 
         displayStatus();
 
-        allocSize = snprintf(NULL, 0, "%s", dir);
         if (snprintf(prev_dir, sizeof prev_dir, "%s", dir) >= (int)sizeof prev_dir) {
             displayAlert("Path too long");
             exit(1);
@@ -131,10 +124,6 @@ int main(int argc, char* argv[]) {
 
             len_preview = getFiles(next_dir, &next_directories);
             if (len_preview > 0) {
-                if (snprintf(sort_dir, sizeof sort_dir, "%s", next_dir) >= (int)sizeof sort_dir) {
-                    displayAlert("Path too long");
-                    exit(1);
-                }
                 sortFiles(next_directories, len_preview, next_dir);
             }
         }
