@@ -37,7 +37,7 @@ This audit prioritizes memory safety, filesystem correctness, deterministic beha
 
 These items require additional implementation and regression coverage before CFL should be considered production-hardened:
 
-1. **Selection lookup complexity:** rendering currently checks selection membership repeatedly. A cached hash set should replace per-entry file reopening and linear clipboard scans.
+1. **Selection lookup complexity:** rendering now uses a cached sorted in-memory index and binary search rather than reopening and linearly scanning the selection file for every row. Each lookup still checks selection-file metadata; a generation counter or explicit invalidation at all mutation points could remove even that per-row `stat()`.
 2. **Synchronous operations:** large copies, deletes, scans, metadata probes, and external programs can block the UI. Add progress/cancellation where safe, or run long work asynchronously while keeping UI state coherent.
 3. **Header coupling:** `functions.h` contains global state and many function definitions and includes multiple implementation headers. Split state, filesystem operations, previews, selection storage, and UI into translation units with explicit interfaces.
 4. **Filesystem race conditions:** paths can be replaced between inspection and operation. Prefer descriptor-relative APIs (`openat`, `fstatat`, `renameat`, `unlinkat`) where practical and do not treat a prior permission check as authorization.
