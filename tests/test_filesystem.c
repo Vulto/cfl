@@ -92,6 +92,31 @@ int main(void) {
     }
     assert(build_path(path, sizeof path, root, "folder") == 0);
     assert(rmdir(path) == 0);
+
+    char selectionPath[PATH_MAX];
+    char temporarySelectionPath[PATH_MAX];
+    assert(build_path(selectionPath, sizeof selectionPath, root, "selection") == 0);
+    assert(build_path(temporarySelectionPath, sizeof temporarySelectionPath, root, "selection.tmp") == 0);
+    clipboard_path = selectionPath;
+    temp_clipboard_path = temporarySelectionPath;
+
+    char encodedPath[PATH_MAX * 3 + 1];
+    assert(CflEncodePath("/tmp/line\nbreak/%0A", encodedPath, sizeof encodedPath) == 0);
+    writeClipboard(encodedPath);
+    assert(checkClipboard("/tmp/line\nbreak/%0A") == 1);
+    assert(checkClipboard("/tmp/line%0Abreak/%0A") == 0);
+
+    char secondEncodedPath[PATH_MAX * 3 + 1];
+    assert(CflEncodePath("/tmp/second", secondEncodedPath, sizeof secondEncodedPath) == 0);
+    writeClipboard(secondEncodedPath);
+    assert(checkClipboard("/tmp/second") == 1);
+    removeClipboard(encodedPath);
+    assert(checkClipboard("/tmp/line\nbreak/%0A") == 0);
+    assert(checkClipboard("/tmp/second") == 1);
+
+    clearClipboard();
+    clipboard_path = NULL;
+    temp_clipboard_path = NULL;
     assert(rmdir(root) == 0);
 
     return 0;
