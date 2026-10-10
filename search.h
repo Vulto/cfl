@@ -319,11 +319,7 @@ static void search_draw_preview(char **files, search_filt *filt, int sel,
         *preview_n = filled;
         len_preview = filled;
         if (filled > 0) {
-            char saved_sort[PATH_MAX];
-            snprintf(saved_sort, sizeof saved_sort, "%s", sort_dir);
-            if (snprintf(sort_dir, sizeof sort_dir, "%s", path) < (int)sizeof sort_dir)
-                sortFiles(*preview_listing, filled, path);
-            snprintf(sort_dir, sizeof sort_dir, "%s", saved_sort);
+            sortFiles(*preview_listing, filled, path);
             PreviewNextDir(path, *preview_listing);
         } else {
             wmove(preview_win, 1, 2);
