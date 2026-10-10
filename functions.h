@@ -1714,6 +1714,7 @@ void openFile(char *filepath) {
     if (cfl_wait_child(pid) != 0)
         fprintf(stderr, "File opener failed: %s\n", filepath);
     sigprocmask(SIG_UNBLOCK, &x, NULL);
+    refresh();
 }
 
 void help(WINDOW *main_win) {
