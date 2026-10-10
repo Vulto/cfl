@@ -504,34 +504,32 @@ static char *replace_alloc(const char *str, const char *a, const char *b) {
 }
 
 int checkClipboard(char *filepath) {
-	FILE *f = fopen(clipboard_path, "r");
-	char buf[PATH_MAX];
-	char *temp = NULL;
-	allocSize = snprintf(NULL,0,"%s", filepath);
-	temp = malloc(allocSize+1);
-	if(temp == NULL) {
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(temp, allocSize+1, "%s", filepath);
-	temp[strlen(temp)]='\0';
-	if(f == NULL) {
-		free(temp);
-		return 0;
-	}
-	replace(temp,"\n","//");
-	while(fgets(buf, PATH_MAX, (FILE*) f)) {
-		buf[strlen(buf)-1] = '\0';
-		if(strcmp(temp,buf) == 0) {
-			free(temp);
-			fclose(f);
-			return 1;
-		}
-	}
-	fclose(f);
-	free(temp);
-	return 0;
+    if (filepath == NULL || clipboard_path == NULL)
+        return 0;
+
+    FILE *f = fopen(clipboard_path, "r");
+    if (f == NULL)
+        return 0;
+
+    char buf[PATH_MAX * 2 + 1];
+    char *encoded = replace_alloc(filepath, "\n", "//");
+    if (encoded == NULL) {
+        fclose(f);
+        return 0;
+    }
+
+    int readResult;
+    while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
+        if (strcmp(encoded, buf) == 0) {
+            free(encoded);
+            fclose(f);
+            return 1;
+        }
+    }
+
+    free(encoded);
+    fclose(f);
+    return 0;
 }
 
 void writeClipboard(char *filepath) {
@@ -546,38 +544,44 @@ void writeClipboard(char *filepath) {
 }
 
 void removeClipboard(char *filepath) {
-	FILE *f1;
-	FILE *f2;
-	char buf[PATH_MAX];
+    FILE *f1 = fopen(clipboard_path, "r");
+    if (f1 == NULL) {
+        displayAlert("Couldn't open selection file");
+        return;
+    }
 
-	f1 = fopen(clipboard_path, "r");
-	f2 = fopen(temp_clipboard_path, "w");
-	if (f1 == NULL) {
-		endwin();
-		printf("Couldn't Open Clipboard File!\n");
-		exit(1);
-	}
-	if (f2 == NULL) {
-		endwin();
-		printf("Couldn't Create Temporary Clipboard File!\n");
-		fclose(f1); 
-		exit(1);
-	}
+    FILE *f2 = fopen(temp_clipboard_path, "w");
+    if (f2 == NULL) {
+        fclose(f1);
+        displayAlert("Couldn't create temporary selection file");
+        return;
+    }
 
-	while (fgets(buf, PATH_MAX, f1)) {
-		buf[strlen(buf) - 1] = '\0';
-		if (strcasecmp(buf, filepath) != 0)
-			fprintf(f2, "%s\n", buf);
-	}
+    char buf[PATH_MAX * 2 + 1];
+    int failed = 0;
+    int readResult;
+    while ((readResult = CflReadLine(f1, buf, sizeof buf)) > 0) {
+        if (strcmp(buf, filepath) != 0 && fprintf(f2, "%s\n", buf) < 0) {
+            failed = 1;
+            break;
+        }
+    }
+    if (readResult < 0 || ferror(f1))
+        failed = 1;
+    if (fclose(f2) != 0)
+        failed = 1;
+    fclose(f1);
 
-	fclose(f1);
-	fclose(f2);
+    if (failed) {
+        remove(temp_clipboard_path);
+        displayAlert("Couldn't update selection file");
+        return;
+    }
 
-	if (rename(temp_clipboard_path, clipboard_path) != 0) {
-		endwin();
-		perror("Couldn't move temporary clipboard file");
-		exit(1);
-	}
+    if (rename(temp_clipboard_path, clipboard_path) != 0) {
+        remove(temp_clipboard_path);
+        displayAlert("Couldn't replace selection file");
+    }
 }
 
 void clearClipboard(void) {
