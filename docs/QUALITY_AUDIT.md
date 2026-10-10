@@ -32,6 +32,10 @@ This audit prioritizes memory safety, filesystem correctness, deterministic beha
 ### Directory-list performance
 
 - Directory type is now determined once per item before sorting. The previous comparator performed filesystem metadata queries during each sort comparison, causing repeated `stat()` calls on the same entries.
+- Selection membership now uses a cached sorted in-memory index and binary search instead of reopening and linearly scanning the selection file for every displayed row.
+- Window recreation now frees old ncurses windows; undersized terminals and failed window allocation are handled without dereferencing null windows.
+- Parent-path handling now tolerates relative paths and root without null-pointer arithmetic.
+- Delete operations now inspect parent-directory write/execute permissions instead of treating a file's own write bit as permission to unlink it.
 
 ## Remaining audit risks
 
@@ -43,7 +47,7 @@ These items require additional implementation and regression coverage before CFL
 4. **Filesystem race conditions:** paths can be replaced between inspection and operation. Prefer descriptor-relative APIs (`openat`, `fstatat`, `renameat`, `unlinkat`) where practical and do not treat a prior permission check as authorization.
 5. **Partial-operation recovery:** copy/move/trash batches should report per-item outcomes and preserve only failed items in the selection rather than retaining a mixed list of succeeded and failed paths.
 6. **Clipboard write durability:** selection-file writes should detect short writes, flush/close errors, and use an atomic replacement for bulk edits.
-7. **Terminal edge cases:** test resize storms, tiny terminal dimensions, failed `newwin()`, and modal dialogs wider than the terminal.
+7. **Terminal edge cases:** test resize storms, failed `newwin()`, and modal dialogs wider than the terminal. Tiny terminals now exit cleanly, but all modal layouts still need cell-aware clamping.
 8. **Preview limits:** test very large files, special files, unreadable files, malformed media, broken pipes, and missing optional programs. Avoid reading FIFOs/devices as ordinary previews.
 9. **Unicode display:** byte-length truncation is not equivalent to terminal-cell width for wide and combining characters. Rendering should use wide-character APIs and cell-aware clipping.
 10. **Permission handling:** avoid automatic `sudo` retries for every failed operation. Distinguish permission errors from invalid paths, missing files, read-only filesystems, and other failures.
