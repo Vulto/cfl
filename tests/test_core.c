@@ -37,6 +37,20 @@ static void TestJsonEscape(void) {
     assert(CflJsonEscape("x", escaped, 0) == -1);
 }
 
+static void TestPathEncoding(void) {
+    const char original[] = "/tmp/100%/line\nbreak/%0A";
+    char encoded[128];
+    assert(CflEncodePath(original, encoded, sizeof encoded) == 0);
+    assert(strcmp(encoded, "/tmp/100%25/line%0Abreak/%250A") == 0);
+    CflDecodePath(encoded);
+    assert(strcmp(encoded, original) == 0);
+
+    char small[4];
+    assert(CflEncodePath("long\npath", small, sizeof small) == -1);
+    assert(small[0] == '\0');
+    CflDecodePath(NULL);
+}
+
 static void TestReadLine(void) {
     FILE *stream = tmpfile();
     char line[16];
@@ -81,6 +95,7 @@ static void TestReadLine(void) {
 int main(void) {
     TestBuildPath();
     TestJsonEscape();
+    TestPathEncoding();
     TestReadLine();
     puts("CFL core tests passed");
     return 0;
