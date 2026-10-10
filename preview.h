@@ -603,7 +603,7 @@ void PreviewNextDir(char *next_dir_arg, char **next_directories) {
         int y = i - start + 1;
         wmove(preview_win, y, 2);
         snprintf(temp_dir, sizeof(temp_dir), "%s/%s", next_dir_arg, next_directories[i]);
-        if (isRegularFile(temp_dir) == 0) {
+        if (isDirectory(temp_dir)) {
             wattron(preview_win, A_BOLD);
         } else {
             wattroff(preview_win, A_BOLD);
