@@ -3,6 +3,13 @@
 int main(int argc, char* argv[]) {
     init(argc, argv);
     cursesInit();
+    initWindows();
+    if (!current_win || !preview_win || !status_win) {
+        endwin();
+        fprintf(stderr, "Terminal too small to display CFL (minimum 24x8).\n");
+        WrappeUp();
+        return EXIT_FAILURE;
+    }
 
     int ch = 0;
     int reloadDirectory = 1;
@@ -11,6 +18,12 @@ int main(int argc, char* argv[]) {
     char cachedDirectory[PATH_MAX] = {0};
 
     while (ch != KEY_ESCAPE) {
+        if (!current_win || !preview_win || !status_win) {
+            endwin();
+            fprintf(stderr, "Terminal too small to display CFL (minimum 24x8).\n");
+            WrappeUp();
+            return EXIT_FAILURE;
+        }
         if (reloadDirectory || strcmp(cachedDirectory, dir) != 0) {
             preview_invalidate();
             if (directories != NULL) {
@@ -46,13 +59,6 @@ int main(int argc, char* argv[]) {
         /* Respect 1-line top + bottom margin + status bar */
         maxy = LINES - 2 * UI_MARGIN - 2;
 
-        initWindows();
-        if (!current_win || !preview_win || !status_win) {
-            endwin();
-            fprintf(stderr, "Terminal too small to display CFL (minimum 24x8).\n");
-            WrappeUp();
-            return EXIT_FAILURE;
-        }
         wclear(current_win);
 
         int t = 0;
