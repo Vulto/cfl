@@ -943,176 +943,144 @@ void removeFiles(void) {
         displayAlert("One or more delete operations failed; selection retained");
 }
 
-void renameFiles(char **directories){
-	if( access( clipboard_path, F_OK ) == -1 ){
-		snprintf(temp_dir, sizeof(temp_dir), "%s/%s", dir, directories[selection]);
+void renameFiles(char **directories) {
+    if (clipboard_path == NULL || temp_clipboard_path == NULL)
+        return;
+
+    if (access(clipboard_path, F_OK) != 0) {
+        if (directories == NULL || selection < 0 || selection >= len) {
+            displayAlert("No file selected");
+            return;
+        }
+        if (build_path(temp_dir, sizeof temp_dir, dir, directories[selection]) != 0) {
+            displayAlert("Selected path is too long");
+            return;
+        }
         char encoded[PATH_MAX * 3 + 1];
         if (CflEncodePath(temp_dir, encoded, sizeof encoded) != 0) {
             displayAlert("Couldn't encode selected path");
             return;
         }
         writeClipboard(encoded);
-	}
-	pid_t pid;
+    }
 
-	FILE *f = fopen(clipboard_path, "r");
-	FILE *f2;
+    FILE *source = fopen(clipboard_path, "r");
+    if (source == NULL) {
+        displayAlert("Couldn't open selection file");
+        return;
+    }
 
-	char *cmd = NULL;
+    FILE *temporary = fopen(temp_clipboard_path, "w");
+    if (temporary == NULL) {
+        fclose(source);
+        displayAlert("Couldn't create temporary selection file");
+        return;
+    }
 
-	char buf[PATH_MAX * 3 + 1];
-	char buf2[PATH_MAX * 3 + 1];
-
-	int count = 0;
-	int count2 = 0;
-
-	pid = fork();
-	if( pid == 0 ){
-		execlp("cp", "cp", clipboard_path, temp_clipboard_path, (char *)0);
-		exit(1);
-	} else {
-		int status;
-		waitpid(pid, &status, 0);
-	}
-	endwin();
-
-	allocSize = snprintf(NULL,0,"%s", editor);
-	cmd = malloc(allocSize + 1);
-	if(cmd == NULL){
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(cmd,allocSize+1,"%s", editor);
-
-	pid = fork();
-	if( pid == 0 ) {
-		execlp(cmd, cmd, temp_clipboard_path, (char *)0);
-		exit(1);
-	} else {
-		int status;
-		waitpid(pid, &status, 0);
-		free(cmd);
-	}
-
-    int failed = 0;
+    char line[PATH_MAX * 3 + 1];
     int readResult;
-    while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
-        count2 = -1;
-        f2 = fopen(temp_clipboard_path, "r");
-        if (f2 == NULL) {
-            displayAlert("Couldn't reopen temporary selection file");
+    int failed = 0;
+    while ((readResult = CflReadLine(source, line, sizeof line)) > 0) {
+        if (fprintf(temporary, "%s\n", line) < 0) {
             failed = 1;
             break;
         }
-        int readResult2;
-        while ((readResult2 = CflReadLine(f2, buf2, sizeof buf2)) > 0) {
-            count2++;
-            if (count2 == count) {
-                CflDecodePath(buf2);
-                CflDecodePath(buf);
-
-                pid = fork();
-                if (pid == 0) {
-                    execlp("mv", "mv", "-ivn", "--", buf, buf2, (char *)0);
-                    _exit(127);
-                } else if (pid < 0 || cfl_wait_child(pid) != 0) {
-                    displayAlert("Rename operation failed");
-                    failed = 1;
-                }
-            }
-        }
-        if (readResult2 < 0) {
-            displayAlert("Invalid line in temporary selection file");
-            failed = 1;
-        }
-        count++;
-        fclose(f2);
     }
-    if (readResult < 0) {
-        displayAlert("Invalid line in selection file");
+    if (readResult < 0 || ferror(source))
         failed = 1;
-    }
-    fclose(f);
-
-    if (!failed)
-        clearClipboard();
-    else
-        displayAlert("Some rename operations failed; selection retained");
-    remove(temp_clipboard_path);
-
-	refresh();
-}
-
-void moveFiles(char *present_dir) {
-    FILE *f = fopen(clipboard_path, "r");
-    char buf[PATH_MAX * 3 + 1];
-    char dest_path[PATH_MAX];
-    int failed = 0;
-
-    if (f == NULL) {
-        perror("Failed to open selection file");
+    if (fclose(source) != 0)
+        failed = 1;
+    if (fclose(temporary) != 0)
+        failed = 1;
+    if (failed) {
+        remove(temp_clipboard_path);
+        displayAlert("Couldn't prepare selection editor");
         return;
     }
 
     endwin();
-    int readResult;
-    while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
-        if (buf[0] == '\0')
-            continue;
-        CflDecodePath(buf);
+    pid_t pid = fork();
+    if (pid == 0) {
+        execlp(editor, editor, temp_clipboard_path, (char *)0);
+        _exit(127);
+    }
+    if (pid < 0 || cfl_wait_child(pid) != 0) {
+        refresh();
+        remove(temp_clipboard_path);
+        displayAlert("Selection editor failed");
+        return;
+    }
 
-        const char *base = strrchr(buf, '/');
-        base = base ? base + 1 : buf;
-        if (build_path(dest_path, sizeof dest_path, present_dir, base) != 0) {
-            fprintf(stderr, "Destination path too long: %s\n", base);
+    source = fopen(clipboard_path, "r");
+    temporary = fopen(temp_clipboard_path, "r");
+    if (source == NULL || temporary == NULL) {
+        if (source) fclose(source);
+        if (temporary) fclose(temporary);
+        refresh();
+        remove(temp_clipboard_path);
+        displayAlert("Couldn't read edited selection");
+        return;
+    }
+
+    char oldEncoded[PATH_MAX * 3 + 1];
+    char newEncoded[PATH_MAX * 3 + 1];
+    while (1) {
+        int oldResult = CflReadLine(source, oldEncoded, sizeof oldEncoded);
+        int newResult = CflReadLine(temporary, newEncoded, sizeof newEncoded);
+        if (oldResult == 0 && newResult == 0)
+            break;
+        if (oldResult != 1 || newResult != 1) {
+            failed = 1;
+            break;
+        }
+
+        CflDecodePath(oldEncoded);
+        CflDecodePath(newEncoded);
+        if (strcmp(oldEncoded, newEncoded) == 0)
+            continue;
+        if (strlen(oldEncoded) >= PATH_MAX || strlen(newEncoded) >= PATH_MAX) {
             failed = 1;
             continue;
         }
 
         struct stat destinationStat;
-        if (lstat(dest_path, &destinationStat) == 0) {
-            fprintf(stderr, "Destination already exists: %s\n", dest_path);
+        if (lstat(newEncoded, &destinationStat) == 0) {
+            fprintf(stderr, "Rename destination already exists: %s\n", newEncoded);
             failed = 1;
             continue;
         }
         if (errno != ENOENT) {
-            perror("Cannot inspect destination");
+            perror("Cannot inspect rename destination");
             failed = 1;
             continue;
         }
 
-        pid_t pid = fork();
+        pid = fork();
         if (pid == 0) {
-            execlp("mv", "mv", "-n", "--", buf, dest_path, (char *)0);
+            execlp("mv", "mv", "-n", "--", oldEncoded, newEncoded, (char *)0);
             _exit(127);
         }
         if (pid < 0 || cfl_wait_child(pid) != 0) {
-            perror("Error moving file");
             failed = 1;
             continue;
         }
 
         struct stat sourceStat;
-        if (lstat(buf, &sourceStat) == 0) {
-            fprintf(stderr, "Move skipped or failed (destination may exist): %s\n", base);
+        if (lstat(oldEncoded, &sourceStat) == 0 || errno != ENOENT)
             failed = 1;
-        } else if (errno != ENOENT) {
-            perror("Cannot verify moved source");
-            failed = 1;
-        } else {
-            printf("Moved: %s -> %s\n", buf, dest_path);
-        }
     }
-    if (readResult < 0)
-        failed = 1;
 
-    fclose(f);
+    if (ferror(source) || ferror(temporary))
+        failed = 1;
+    fclose(source);
+    fclose(temporary);
+    remove(temp_clipboard_path);
     refresh();
+
     if (!failed)
         clearClipboard();
     else
-        displayAlert("One or more move operations failed; selection retained");
+        displayAlert("Some rename operations failed; selection retained");
 }
 
 /* ---------- FreeDesktop Trash (home trash) ---------- */
