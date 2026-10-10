@@ -395,27 +395,33 @@ void init(int argc, char* argv[]) {
 		snprintf(editor, allocSize+1, "%s", getenv("EDITOR"));
 	}
 
-	struct stat st = {0};
-	if (getenv("XDG_CONFIG_HOME") == NULL || getenv("XDG_CONFIG_HOME")[0] == '\0') {
-		allocSize = snprintf(NULL,0,"%s/.config/cfl",homeDir);
-		cache_path = malloc(allocSize+1);
-		if(cache_path == NULL) {
-			printf("%s\n", "Couldn't initialize cache path");
-			exit(1);
-		}
-		snprintf(cache_path,allocSize+1,"%s/.config/cfl",homeDir);
-	} else {
-		allocSize = snprintf(NULL,0,"%s/cfl",getenv("XDG_CONFIG_HOME"));
-		cache_path = malloc(allocSize+1);
-		if(cache_path == NULL) {
-			printf("%s\n", "Couldn't initialize cache path");
-			exit(1);
-		}
-		snprintf(cache_path,allocSize+1,"%s/cfl",getenv("XDG_CONFIG_HOME"));
-	}
-	if (stat(cache_path, &st) == -1) {
-		mkdir(cache_path, 0751);
-	}
+    struct stat st = {0};
+    const char *configHome = getenv("XDG_CONFIG_HOME");
+    if (configHome == NULL || configHome[0] == '\0')
+        configHome = homeDir;
+
+    allocSize = snprintf(NULL, 0, "%s/cfl", configHome);
+    cache_path = malloc((size_t)allocSize + 1);
+    if (cache_path == NULL) {
+        fprintf(stderr, "Couldn't initialize cache path\n");
+        exit(EXIT_FAILURE);
+    }
+    snprintf(cache_path, (size_t)allocSize + 1, "%s/cfl", configHome);
+
+    if (stat(cache_path, &st) != 0) {
+        if (errno != ENOENT || mkdir(cache_path, 0700) != 0 && errno != EEXIST) {
+            perror("Cannot create CFL configuration directory");
+            exit(EXIT_FAILURE);
+        }
+        if (stat(cache_path, &st) != 0) {
+            perror("Cannot access CFL configuration directory");
+            exit(EXIT_FAILURE);
+        }
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        fprintf(stderr, "CFL configuration path is not a directory: %s\n", cache_path);
+        exit(EXIT_FAILURE);
+    }
 
 	/* Remove legacy shared clipboard (pre session-local selection) */
 	{
