@@ -989,8 +989,23 @@ void moveFiles(char *present_dir) {
             continue;
         }
 
-        if (rename(buf, dest_path) != 0) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            execlp("mv", "mv", "-n", "--", buf, dest_path, (char *)0);
+            _exit(127);
+        }
+        if (pid < 0 || cfl_wait_child(pid) != 0) {
             perror("Error moving file");
+            failed = 1;
+            continue;
+        }
+
+        struct stat sourceStat;
+        if (lstat(buf, &sourceStat) == 0) {
+            fprintf(stderr, "Move skipped or failed (destination may exist): %s\n", base);
+            failed = 1;
+        } else if (errno != ENOENT) {
+            perror("Cannot verify moved source");
             failed = 1;
         } else {
             printf("Moved: %s -> %s\n", buf, dest_path);
