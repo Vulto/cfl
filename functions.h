@@ -526,6 +526,12 @@ static int CflSelectionCacheAppend(const char *item) {
     return 0;
 }
 
+static int CflCompareSelectionStrings(const void *left, const void *right) {
+    const char *const *a = left;
+    const char *const *b = right;
+    return strcmp(*a, *b);
+}
+
 static int CflSelectionCacheLoad(void) {
     struct stat before;
     if (stat(clipboard_path, &before) != 0) {
@@ -559,6 +565,9 @@ static int CflSelectionCacheLoad(void) {
         CflSelectionCacheClear();
         return -1;
     }
+
+    qsort(CflSelectionCache.items, CflSelectionCache.count,
+          sizeof *CflSelectionCache.items, CflCompareSelectionStrings);
 
     struct stat after;
     if (stat(clipboard_path, &after) != 0 ||
