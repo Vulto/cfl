@@ -260,26 +260,41 @@ void handleFlags(char** directories) {
 
 // Moving this function to ui.h requires further refactoring
 void initWindows(void) {
-	int content_left, panel_top, panel_height, sep_col;
-	ui_get_layout(&content_left, &panel_top, &panel_height, &sep_col);
+    if (status_win) delwin(status_win);
+    if (current_win) delwin(current_win);
+    if (preview_win) delwin(preview_win);
+    if (keys_win) delwin(keys_win);
+    status_win = current_win = preview_win = keys_win = NULL;
 
-	int margin = UI_MARGIN;
-	int content_w = COLS - 2 * margin;
-	int left_w  = (content_w * 2) / 5 + 2;
-	int right_w = content_w - left_w - 1;
+    /* Leave enough room for both panes, status, and margins. */
+    if (LINES < 8 || COLS < 24)
+        return;
 
-	status_win = newwin(2, content_w, margin, content_left);
+    int content_left, panel_top, panel_height, sep_col;
+    ui_get_layout(&content_left, &panel_top, &panel_height, &sep_col);
 
-	starty = panel_top;
-	preview_start = sep_col;
+    int margin = UI_MARGIN;
+    int content_w = COLS - 2 * margin;
+    int left_w = (content_w * 2) / 5 + 2;
+    int right_w = content_w - left_w - 1;
+    if (content_w <= 0 || panel_height <= 0 || left_w <= 0 || right_w <= 0)
+        return;
 
-	current_win = newwin(panel_height, left_w,  starty, content_left);
-	preview_win = newwin(panel_height, right_w, starty, sep_col + 1);
+    status_win = newwin(2, content_w, margin, content_left);
+    current_win = newwin(panel_height, left_w, panel_top, content_left);
+    preview_win = newwin(panel_height, right_w, panel_top, sep_col + 1);
 
-	keypad(current_win, TRUE);
-	sigprocmask(SIG_UNBLOCK, &x, NULL);
+    if (!status_win || !current_win || !preview_win) {
+        if (status_win) delwin(status_win);
+        if (current_win) delwin(current_win);
+        if (preview_win) delwin(preview_win);
+        status_win = current_win = preview_win = NULL;
+        return;
+    }
 
-	ui_clear_gaps();
+    keypad(current_win, TRUE);
+    sigprocmask(SIG_UNBLOCK, &x, NULL);
+    ui_clear_gaps();
 }
 
 int isRegularFile(const char *path) {
