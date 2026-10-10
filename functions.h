@@ -434,17 +434,73 @@ int fileExists(char *file) {
     return (access(file, F_OK) != -1) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
-char* replace(char* str, char* a, char* b) {
-	int len  = strlen(str);
-	int lena = strlen(a);
-	int lenb = strlen(b);
-	char* p;
-	for (p = str; (p = strstr(p, a)); ++p) {
-		if (lena != lenb) // shift end as needed
-			memmove(p+lenb, p+lena, len - (p - str) + lenb);
-		memcpy(p, b, lenb);
-	}
-	return str;
+char *replace(char *str, char *a, char *b) {
+    if (str == NULL || a == NULL || b == NULL || a[0] == '\0')
+        return str;
+
+    size_t needleLen = strlen(a);
+    size_t replacementLen = strlen(b);
+    if (replacementLen > needleLen)
+        return NULL;
+
+    char *readPos = str;
+    char *writePos = str;
+    while (*readPos != '\0') {
+        if (strncmp(readPos, a, needleLen) == 0) {
+            memcpy(writePos, b, replacementLen);
+            writePos += replacementLen;
+            readPos += needleLen;
+        } else {
+            *writePos++ = *readPos++;
+        }
+    }
+    *writePos = '\0';
+    return str;
+}
+
+/* Allocate a correctly sized result when replacement can expand the input. */
+static char *replace_alloc(const char *str, const char *a, const char *b) {
+    if (str == NULL || a == NULL || b == NULL || a[0] == '\0')
+        return NULL;
+
+    size_t sourceLen = strlen(str);
+    size_t needleLen = strlen(a);
+    size_t replacementLen = strlen(b);
+    size_t matches = 0;
+    const char *scan = str;
+
+    while ((scan = strstr(scan, a)) != NULL) {
+        ++matches;
+        scan += needleLen;
+    }
+
+    if (replacementLen > needleLen &&
+        matches > (SIZE_MAX - sourceLen - 1) / (replacementLen - needleLen))
+        return NULL;
+
+    size_t resultLen = sourceLen;
+    if (replacementLen >= needleLen)
+        resultLen += matches * (replacementLen - needleLen);
+    else
+        resultLen -= matches * (needleLen - replacementLen);
+
+    char *result = malloc(resultLen + 1);
+    if (result == NULL)
+        return NULL;
+
+    const char *readPos = str;
+    char *writePos = result;
+    const char *match;
+    while ((match = strstr(readPos, a)) != NULL) {
+        size_t prefixLen = (size_t)(match - readPos);
+        memcpy(writePos, readPos, prefixLen);
+        writePos += prefixLen;
+        memcpy(writePos, b, replacementLen);
+        writePos += replacementLen;
+        readPos = match + needleLen;
+    }
+    strcpy(writePos, readPos);
+    return result;
 }
 
 int checkClipboard(char *filepath) {
