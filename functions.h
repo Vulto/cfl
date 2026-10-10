@@ -603,11 +603,11 @@ void selectAllFiles(char **directories, int n) {
 			continue;
 		if (checkClipboard(path) == 1)
 			continue;
-		char *temp = strdup(path);
-		if (!temp)
-			continue;
-		writeClipboard(replace(temp, "\n", "//"));
-		free(temp);
+        char *encoded = replace_alloc(path, "\n", "//");
+        if (encoded == NULL)
+            continue;
+        writeClipboard(encoded);
+        free(encoded);
 	}
 	setSelectionCount();
 }
@@ -723,14 +723,13 @@ void removeFiles(void) {
 void renameFiles(char **directories){
 	if( access( clipboard_path, F_OK ) == -1 ){
 		snprintf(temp_dir, sizeof(temp_dir), "%s/%s", dir, directories[selection]);
-		char *temp = strdup(temp_dir);
-		if(temp == NULL){
-			endwin();
-			printf("%s\n", "Couldn't allocate memory!");
-			exit(1);
-		}
-		writeClipboard(replace(temp,"\n","//"));
-		free(temp);
+        char *encoded = replace_alloc(temp_dir, "\n", "//");
+        if (encoded == NULL) {
+            displayAlert("Couldn't encode selected path");
+            return;
+        }
+        writeClipboard(encoded);
+        free(encoded);
 	}
 	pid_t pid;
 
