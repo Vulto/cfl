@@ -80,6 +80,7 @@ int isDirectory(const char *path);
 /* Forward decls needed by search.h / delete_search.h / jump_to.h (implemented below) */
 int getFiles(char *directory, char ***target);
 int compare(const void *a, const void *b);
+void sortFiles(char **files, int count, const char *directory);
 int getWritePermissions(char *path);
 void moveFiles(char *present_dir);
 void copyFiles(char *present_dir);
@@ -160,6 +161,48 @@ fail:
         displayAlert("Unable to read directory entries");
         return -1;
     }
+}
+
+typedef struct {
+    char *name;
+    unsigned char isDirectory;
+} CflSortEntry;
+
+static int CflCompareSortEntries(const void *left, const void *right) {
+    const CflSortEntry *a = left;
+    const CflSortEntry *b = right;
+    if (a->isDirectory != b->isDirectory)
+        return (int)b->isDirectory - (int)a->isDirectory;
+    return strcasecmp(a->name, b->name);
+}
+
+/* Probe each entry once instead of issuing stat() from every qsort comparison. */
+void sortFiles(char **files, int count, const char *directory) {
+    if (files == NULL || directory == NULL || count < 2)
+        return;
+    if ((size_t)count > SIZE_MAX / sizeof(CflSortEntry)) {
+        displayAlert("Directory is too large to sort");
+        return;
+    }
+
+    CflSortEntry *entries = malloc((size_t)count * sizeof *entries);
+    if (entries == NULL) {
+        displayAlert("Couldn't allocate sorting memory");
+        return;
+    }
+
+    for (int i = 0; i < count; ++i) {
+        char fullPath[PATH_MAX];
+        entries[i].name = files[i];
+        entries[i].isDirectory =
+            build_path(fullPath, sizeof fullPath, directory, files[i]) == 0 &&
+            isDirectory(fullPath);
+    }
+
+    qsort(entries, (size_t)count, sizeof *entries, CflCompareSortEntries);
+    for (int i = 0; i < count; ++i)
+        files[i] = entries[i].name;
+    free(entries);
 }
 
 int compare (const void * a, const void * b ) {
