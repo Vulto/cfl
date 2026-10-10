@@ -12,6 +12,7 @@ int main(int argc, char* argv[]) {
 
     while (ch != KEY_ESCAPE) {
         if (reloadDirectory || strcmp(cachedDirectory, dir) != 0) {
+            preview_invalidate();
             if (directories != NULL) {
                 for (int j = 0; j < filled; ++j)
                     free(directories[j]);
