@@ -771,13 +771,20 @@ void selectAllFiles(char **directories, int n) {
 }
 
 void getParentPath(char *path) {
-	char *p;
-	p = strrchr(path,'/');
-	path[p-path] = '\0';
-	if(path[0] == '\0') {
-		path[0] = '/';
-		path[1] = '\0';
-	}
+    if (path == NULL || path[0] == '\0')
+        return;
+
+    char *slash = strrchr(path, '/');
+    if (slash == NULL) {
+        path[0] = '.';
+        path[1] = '\0';
+        return;
+    }
+    if (slash == path) {
+        path[1] = '\0';
+        return;
+    }
+    *slash = '\0';
 }
 
 int getWritePermissions(char *path) {
