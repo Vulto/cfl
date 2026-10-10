@@ -25,6 +25,8 @@
 #include <time.h>
 #include <stdarg.h>
 #include <errno.h>
+#include <limits.h>
+#include <stdint.h>
 
 #include "config.h"
 #include "cfl_core.h"
@@ -86,54 +88,77 @@ void trashFiles(void);
 #include "delete_search.h"
 #include "jump_to.h"
 
-int getFiles(char* directory, char*** target) {
-	int i = 0;
-	int capacity = 16;
-	DIR *pDir;
-	struct dirent *pDirent;
-	char **result;
+int getFiles(char *directory, char ***target) {
+    int count = 0;
+    int capacity = 16;
+    DIR *pDir;
+    struct dirent *pDirent;
+    char **result;
 
-	pDir = opendir (directory);
-	if (pDir == NULL) {
-		return -1;
-	}
+    if (target == NULL || directory == NULL)
+        return -1;
+    *target = NULL;
 
-	result = malloc((size_t)capacity * sizeof(char *));
-	if(result == NULL) {
-		closedir(pDir);
-		displayAlert("Couldn't allocate memory!");
-		exit(1);
-	}
+    pDir = opendir(directory);
+    if (pDir == NULL)
+        return -1;
 
-	while ((pDirent = readdir(pDir)) != NULL) {
-		if( strcmp(pDirent->d_name,".") != 0 &&
-				strcmp(pDirent->d_name,"..") != 0 ) {
-			if( pDirent->d_name[0] == '.' )
-				if( hiddenFlag == 0 )
-					continue;
-			if(i >= capacity) {
-				capacity *= 2;
-				char **grown = realloc(result, (size_t)capacity * sizeof(char *));
-				if(grown == NULL) {
-					closedir(pDir);
-					displayAlert("Couldn't allocate memory!");
-					exit(1);
-				}
-				result = grown;
-			}
+    result = malloc((size_t)capacity * sizeof *result);
+    if (result == NULL) {
+        closedir(pDir);
+        displayAlert("Couldn't allocate memory!");
+        return -1;
+    }
 
-			result[i] = strdup(pDirent->d_name);
-			if(result[i++] == NULL) {
-				closedir(pDir);
-				displayAlert("Couldn't allocate memory!");
-				exit(1);
-			}
-		}
-	}
+    while ((pDirent = readdir(pDir)) != NULL) {
+        const char *name = pDirent->d_name;
+        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+            continue;
+        if (name[0] == '.' && hiddenFlag == 0)
+            continue;
 
-	closedir (pDir);
-	*target = result;
-	return i;
+        if (count == capacity) {
+            if (capacity > INT_MAX / 2 ||
+                (size_t)capacity > SIZE_MAX / (2 * sizeof *result)) {
+                errno = EOVERFLOW;
+                goto fail;
+            }
+
+            int newCapacity = capacity * 2;
+            char **grown = realloc(result, (size_t)newCapacity * sizeof *result);
+            if (grown == NULL)
+                goto fail;
+            result = grown;
+            capacity = newCapacity;
+        }
+
+        result[count] = strdup(name);
+        if (result[count] == NULL)
+            goto fail;
+        ++count;
+    }
+
+    if (closedir(pDir) != 0) {
+        for (int j = 0; j < count; ++j)
+            free(result[j]);
+        free(result);
+        return -1;
+    }
+
+    *target = result;
+    return count;
+
+fail:
+    {
+        int savedErrno = errno;
+        closedir(pDir);
+        for (int j = 0; j < count; ++j)
+            free(result[j]);
+        free(result);
+        errno = savedErrno;
+        displayAlert("Unable to read directory entries");
+        return -1;
+    }
 }
 
 int compare (const void * a, const void * b ) {
