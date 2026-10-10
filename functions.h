@@ -72,6 +72,7 @@ void openFile(char *filepath);
 void getLastToken(char *tokenizer);
 void displayAlert(char *message);
 int isRegularFile(const char *path);
+int isDirectory(const char *path);
 
 #include "bookmark.h"
 #include "preview.h"
@@ -168,8 +169,8 @@ int compare (const void * a, const void * b ) {
 	snprintf(temp_filepath1, sizeof(temp_filepath1), "%s/%s", sort_dir, *(char **)a);
 	snprintf(temp_filepath2, sizeof(temp_filepath2), "%s/%s", sort_dir, *(char **)b);
 
-	int is_dir1 = (isRegularFile(temp_filepath1) == 0);
-	int is_dir2 = (isRegularFile(temp_filepath2) == 0);
+	int is_dir1 = (isDirectory(temp_filepath1));
+	int is_dir2 = (isDirectory(temp_filepath2));
 
 	if (is_dir1 != is_dir2) {
 		return is_dir2 - is_dir1;
@@ -250,6 +251,11 @@ int isRegularFile(const char *path) {
 	struct stat st;
 	if (stat(path, &st) != 0) return 0;
 	return S_ISREG(st.st_mode);
+}
+
+int isDirectory(const char *path) {
+    struct stat st;
+    return path != NULL && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
 int isSymlink(const char *path) {
