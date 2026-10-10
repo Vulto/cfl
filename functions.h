@@ -461,30 +461,46 @@ void init(int argc, char* argv[]) {
 		snprintf(trash_path, allocSize + 1, "%s/.local/share/Trash", info->pw_dir);
 	}
 
-	char cwd[PATH_MAX];
-	if (getcwd(cwd, sizeof(cwd)) != NULL) {
-		snprintf(dir, sizeof(dir), "%s", cwd);
-	} else {
-		snprintf(dir, sizeof(dir), "/");
-	}
+    char cwd[PATH_MAX];
+    if (getcwd(cwd, sizeof cwd) == NULL) {
+        perror("Cannot determine current directory");
+        exit(EXIT_FAILURE);
+    }
+    if (snprintf(dir, sizeof dir, "%s", cwd) >= (int)sizeof dir) {
+        fprintf(stderr, "Current directory path too long\n");
+        exit(EXIT_FAILURE);
+    }
 
-	if(argc == 2) {
-		char arg[PATH_MAX];
-		snprintf(arg, sizeof(arg), "%s", argv[1]);
-		if(arg[0] == '/') {
-			if(strlen(arg) > 1 && arg[strlen(arg)-1] == '/') {
-				arg[strlen(arg)-1] = '\0';
-			}
-			snprintf(dir, sizeof(dir), "%s", arg);
-		} else {
-			char temp[PATH_MAX];
-			snprintf(temp, sizeof(temp), "%s/%s", dir, arg);
-			snprintf(dir, sizeof(dir), "%s", temp);
-		}
-	} else if(argc > 2) {
-		printf("Incorrect Usage!\n");
-		exit(1);
-	}
+    if (argc == 2) {
+        const char *argument = argv[1];
+        if (argument == NULL || strlen(argument) >= PATH_MAX) {
+            fprintf(stderr, "Directory argument is too long\n");
+            exit(EXIT_FAILURE);
+        }
+
+        if (argument[0] == '/') {
+            if (snprintf(dir, sizeof dir, "%s", argument) >= (int)sizeof dir) {
+                fprintf(stderr, "Directory argument is too long\n");
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            char target[PATH_MAX];
+            if (build_path(target, sizeof target, dir, argument) != 0 ||
+                snprintf(dir, sizeof dir, "%s", target) >= (int)sizeof dir) {
+                fprintf(stderr, "Directory argument is too long\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        struct stat targetStat;
+        if (stat(dir, &targetStat) != 0 || !S_ISDIR(targetStat.st_mode)) {
+            fprintf(stderr, "Not a readable directory: %s\n", dir);
+            exit(EXIT_FAILURE);
+        }
+    } else if (argc > 2) {
+        fprintf(stderr, "Usage: cfl [directory]\n");
+        exit(EXIT_FAILURE);
+    }
 	/* Selection starts empty each session; never restore a previous list */
 	selectedFiles = 0;
 }
