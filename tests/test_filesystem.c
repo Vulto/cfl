@@ -32,6 +32,15 @@ static void TestParentPath(void) {
     char relative[] = "example";
     getParentPath(relative);
     assert(strcmp(relative, ".") == 0);
+
+    snprintf(temp_dir, sizeof temp_dir, "/");
+    getLastToken("/");
+    assert(last == NULL);
+    snprintf(temp_dir, sizeof temp_dir, "/home/user");
+    getLastToken("/");
+    assert(last != NULL && strcmp(last, "user") == 0);
+    free(last);
+    last = NULL;
 }
 
 int main(void) {
