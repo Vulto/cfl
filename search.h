@@ -230,7 +230,7 @@ static void search_draw_list(char **files, search_filt *filt, int sel, int top) 
 
             char full[PATH_MAX];
             int path_ok = (build_path(full, sizeof full, dir, name) == 0);
-            int is_dir = path_ok && (isRegularFile(full) == 0);
+            int is_dir = path_ok && (isDirectory(full));
 
             if (fidx == sel) {
                 if (has_colors()) wattron(current_win, A_REVERSE);
@@ -306,7 +306,7 @@ static void search_draw_preview(char **files, search_filt *filt, int sel,
     }
 
     /* Directory → list contents; file → text/hex/image preview */
-    if (isRegularFile(path) == 0) {
+    if (isDirectory(path)) {
         ueberzugpp_remove();
         int filled = getFiles(path, preview_listing);
         if (filled < 0) {
