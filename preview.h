@@ -223,14 +223,13 @@ static void ueberzugpp_remove(void) {
 
     char escapedIdentifier[512];
     if (CflJsonEscape(UEBERZUGPP_IDENTIFIER, escapedIdentifier, sizeof escapedIdentifier) == 0) {
-        fprintf(ueberzug_in, "{\\"action\\":\\"remove\\",\\"identifier\\":\\"%s\\"}\\n", escapedIdentifier);
+        fprintf(ueberzug_in, "{\"action\":\"remove\",\"identifier\":\"%s\"}\n", escapedIdentifier);
         fflush(ueberzug_in);
     }
     ueberzug_showing = 0;
     ueberzug_last_w = 0;
     ueberzug_last_h = 0;
 }
-
 /* Add/replace image. Clear only when needed:
  *  - not currently showing an image (nothing to skip)
  *  - new image smaller in width OR height than previous (ghosting)
@@ -261,13 +260,12 @@ static void ueberzugpp_add(const char *img_path) {
     int iw = 0, ih = 0;
     int got_dims = image_dimensions(img_path, &iw, &ih);
     int need_clear = 0;
-    if (ueberzug_showing) {
-        if (!got_dims || iw < ueberzug_last_w || ih < ueberzug_last_h)
-            need_clear = 1;
-    }
+    if (ueberzug_showing &&
+        (!got_dims || iw < ueberzug_last_w || ih < ueberzug_last_h))
+        need_clear = 1;
 
     if (need_clear) {
-        fprintf(ueberzug_in, "{\\"action\\":\\"remove\\",\\"identifier\\":\\"%s\\"}\\n", escapedIdentifier);
+        fprintf(ueberzug_in, "{\"action\":\"remove\",\"identifier\":\"%s\"}\n", escapedIdentifier);
         fflush(ueberzug_in);
         ueberzug_showing = 0;
         ueberzug_last_w = 0;
@@ -275,7 +273,7 @@ static void ueberzugpp_add(const char *img_path) {
     }
 
     fprintf(ueberzug_in,
-            "{\\"action\\":\\"add\\",\\"identifier\\":\\"%s\\",\\"path\\":\\"%s\\",\\"x\\":%d,\\"y\\":%d,\\"width\\":%d,\\"height\\":%d}\\n",
+            "{\"action\":\"add\",\"identifier\":\"%s\",\"path\":\"%s\",\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d}\n",
             escapedIdentifier, escapedPath, x, y, w, h);
     fflush(ueberzug_in);
 
