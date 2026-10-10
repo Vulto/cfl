@@ -533,10 +533,7 @@ void selectAllFiles(char **directories, int n) {
         char encoded[PATH_MAX * 3 + 1];
         if (CflEncodePath(path, encoded, sizeof encoded) != 0)
             continue;
-        if (encoded == NULL)
-            continue;
         writeClipboard(encoded);
-        free(encoded);
 	}
 	setSelectionCount();
 }
@@ -572,7 +569,7 @@ static int cfl_wait_child(pid_t pid) {
 
 void copyFiles(char *present_dir) {
     FILE *f = fopen(clipboard_path, "r");
-    char buf[PATH_MAX];
+    char buf[PATH_MAX * 3 + 1];
     int flag;
     int failed = 0;
 
@@ -657,12 +654,7 @@ void renameFiles(char **directories){
             displayAlert("Couldn't encode selected path");
             return;
         }
-        if (encoded == NULL) {
-            displayAlert("Couldn't encode selected path");
-            return;
-        }
         writeClipboard(encoded);
-        free(encoded);
 	}
 	pid_t pid;
 
@@ -671,8 +663,8 @@ void renameFiles(char **directories){
 
 	char *cmd = NULL;
 
-	char buf[PATH_MAX];
-	char buf2[PATH_MAX];
+	char buf[PATH_MAX * 3 + 1];
+	char buf2[PATH_MAX * 3 + 1];
 
 	int count = 0;
 	int count2 = 0;
@@ -706,33 +698,37 @@ void renameFiles(char **directories){
 		free(cmd);
 	}
 
-	while(fgets(buf, PATH_MAX, (FILE*) f)) {
-		count2=-1;
-		f2 = fopen(temp_clipboard_path,"r");
-		while(fgets(buf2, PATH_MAX, (FILE*) f2)) {
-			count2++;
-			if(buf[strlen(buf)-1] == '\n')
-				buf[strlen(buf)-1] = '\0';
-			if(count2 == count){
-				if(buf2[strlen(buf2)-1] == '\n')
-					buf2[strlen(buf2)-1] = '\0';
+    int readResult;
+    while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
+        count2 = -1;
+        f2 = fopen(temp_clipboard_path, "r");
+        if (f2 == NULL) {
+            displayAlert("Couldn't reopen temporary selection file");
+            break;
+        }
+        int readResult2;
+        while ((readResult2 = CflReadLine(f2, buf2, sizeof buf2)) > 0) {
+            count2++;
+            if (count2 == count) {
+                CflDecodePath(buf2);
+                CflDecodePath(buf);
 
-				CflDecodePath(buf2);
-				CflDecodePath(buf);
-
-				pid = fork();
-				if( pid == 0 ) {
-					execlp("mv", "mv", "-ivn", buf, buf2, (char *)0);
-					exit(1);
-				} else {
-					int status;
-					waitpid(pid, &status, 0);
-				}
-			}
-		}
-		count++;
-		fclose(f2);
-	}
+                pid = fork();
+                if (pid == 0) {
+                    execlp("mv", "mv", "-ivn", "--", buf, buf2, (char *)0);
+                    _exit(127);
+                } else if (pid < 0 || cfl_wait_child(pid) != 0) {
+                    displayAlert("Rename operation failed");
+                }
+            }
+        }
+        if (readResult2 < 0)
+            displayAlert("Invalid line in temporary selection file");
+        count++;
+        fclose(f2);
+    }
+    if (readResult < 0)
+        displayAlert("Invalid line in selection file");
 	fclose(f);
 
 	clearClipboard();
@@ -742,37 +738,47 @@ void renameFiles(char **directories){
 }
 
 void moveFiles(char *present_dir) {
-	FILE *f = fopen(clipboard_path, "r");
-	char buf[PATH_MAX * 3 + 1];
-	char dest_path[PATH_MAX];
+    FILE *f = fopen(clipboard_path, "r");
+    char buf[PATH_MAX * 3 + 1];
+    char dest_path[PATH_MAX];
+    int failed = 0;
 
-	if (f == NULL) {
-		perror("Failed to open clipboard file");
-		return;
-	}
+    if (f == NULL) {
+        perror("Failed to open selection file");
+        return;
+    }
 
-	endwin();
-	while (fgets(buf, PATH_MAX, f)) {
-		// Remove the newline character
-		buf[strlen(buf) - 1] = '\0';
-		CflDecodePath(buf);
+    endwin();
+    int readResult;
+    while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
+        if (buf[0] == '\0')
+            continue;
+        CflDecodePath(buf);
 
-		// Construct the destination path
-		const char *base = strrchr(buf, '/');
-		base = base ? base + 1 : buf;
-		snprintf(dest_path, PATH_MAX, "%s/%s", present_dir, base);
+        const char *base = strrchr(buf, '/');
+        base = base ? base + 1 : buf;
+        if (build_path(dest_path, sizeof dest_path, present_dir, base) != 0) {
+            fprintf(stderr, "Destination path too long: %s\n", base);
+            failed = 1;
+            continue;
+        }
 
-		// Move the file
-		if (rename(buf, dest_path) != 0) {
-			perror("Error moving file");
-		} else {
-			printf("Moved: %s -> %s\n", buf, dest_path);
-		}
-	}
+        if (rename(buf, dest_path) != 0) {
+            perror("Error moving file");
+            failed = 1;
+        } else {
+            printf("Moved: %s -> %s\n", buf, dest_path);
+        }
+    }
+    if (readResult < 0)
+        failed = 1;
 
-	fclose(f);
-	refresh();
-	clearClipboard();
+    fclose(f);
+    refresh();
+    if (!failed)
+        clearClipboard();
+    else
+        displayAlert("One or more move operations failed; selection retained");
 }
 
 /* ---------- FreeDesktop Trash (home trash) ---------- */
