@@ -99,7 +99,7 @@ static void delete_search_draw_list(char **files, search_filt *filt, int sel, in
 
             char full[PATH_MAX];
             int path_ok = (build_path(full, sizeof full, dir, name) == 0);
-            int is_dir = path_ok && (isRegularFile(full) == 0);
+            int is_dir = path_ok && (isDirectory(full));
 
             wattrset(current_win, A_NORMAL);
 
