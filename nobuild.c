@@ -18,7 +18,7 @@
                 "-Wmissing-include-dirs",   \
                 "-Wunused-variable",        \
                 "-std=c23",                 \
-                "-O0",                      \
+                "-O2",                      \
                 "-D_POSIX_C_SOURCE=200809L"
 
 #define OLD "c.old"
@@ -31,8 +31,6 @@ char *cc(void) {
 }
 
 void Compile(void) {
-    CMD(PRIV_ESC, "mkdir", "-p", "/usr/share/man/man1/cfl");
-    CMD(PRIV_ESC, "mkdir", "-p", "/usr/share/cfl");
     CMD(cc(), "-c", MAIN, CFLAGS, "-o", MAINOBJ);
 }
 

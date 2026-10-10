@@ -25,8 +25,11 @@
 #include <time.h>
 #include <stdarg.h>
 #include <errno.h>
+#include <limits.h>
+#include <stdint.h>
 
 #include "config.h"
+#include "cfl_core.h"
 #include "ui.h"
 
 sigset_t x;
@@ -39,7 +42,6 @@ int allocSize;
 char next_dir  [PATH_MAX];
 char prev_dir  [PATH_MAX];
 char temp_dir  [PATH_MAX];
-char sort_dir  [PATH_MAX];
 
 char* editor = NULL;
 char* shell = NULL;
@@ -61,14 +63,7 @@ char *path;
 FILE *fp;
 
 static int build_path(char *dst, size_t dstsz, const char *base, const char *entry) {
-    /* Avoid "//" when base is root. Returns 0 on success, -1 if truncated/error. */
-    int n;
-    if (base != NULL && base[0] == '/' && base[1] == '\0') {
-        n = snprintf(dst, dstsz, "%s%s", base, entry);
-    } else {
-        n = snprintf(dst, dstsz, "%s/%s", base, entry);
-    }
-    return (n < 0 || (size_t)n >= dstsz) ? -1 : 0;
+    return CflBuildPath(dst, dstsz, base, entry);
 }
 
 // Ueberzug++ helpers (declared here because functions.h is included before their definitions)
@@ -76,87 +71,148 @@ void openFile(char *filepath);
 void getLastToken(char *tokenizer);
 void displayAlert(char *message);
 int isRegularFile(const char *path);
+int isDirectory(const char *path);
 
 #include "bookmark.h"
 #include "preview.h"
 
 /* Forward decls needed by search.h / delete_search.h / jump_to.h (implemented below) */
 int getFiles(char *directory, char ***target);
-int compare(const void *a, const void *b);
+void sortFiles(char **files, int count, const char *directory);
 int getWritePermissions(char *path);
+int getParentWritePermissions(const char *path);
 void moveFiles(char *present_dir);
 void copyFiles(char *present_dir);
 void trashFiles(void);
+static int cfl_mkdir_p(const char *path, mode_t mode);
 
 #include "search.h"
 #include "delete_search.h"
 #include "jump_to.h"
 
-int getFiles(char* directory, char*** target) {
-	int i = 0;
-	int capacity = 16;
-	DIR *pDir;
-	struct dirent *pDirent;
-	char **result;
+int getFiles(char *directory, char ***target) {
+    int count = 0;
+    int capacity = 16;
+    DIR *pDir;
+    struct dirent *pDirent;
+    char **result;
 
-	pDir = opendir (directory);
-	if (pDir == NULL) {
-		return -1;
-	}
+    if (target == NULL || directory == NULL)
+        return -1;
+    *target = NULL;
 
-	result = malloc((size_t)capacity * sizeof(char *));
-	if(result == NULL) {
-		closedir(pDir);
-		displayAlert("Couldn't allocate memory!");
-		exit(1);
-	}
+    pDir = opendir(directory);
+    if (pDir == NULL)
+        return -1;
 
-	while ((pDirent = readdir(pDir)) != NULL) {
-		if( strcmp(pDirent->d_name,".") != 0 &&
-				strcmp(pDirent->d_name,"..") != 0 ) {
-			if( pDirent->d_name[0] == '.' )
-				if( hiddenFlag == 0 )
-					continue;
-			if(i >= capacity) {
-				capacity *= 2;
-				char **grown = realloc(result, (size_t)capacity * sizeof(char *));
-				if(grown == NULL) {
-					closedir(pDir);
-					displayAlert("Couldn't allocate memory!");
-					exit(1);
-				}
-				result = grown;
-			}
+    result = malloc((size_t)capacity * sizeof *result);
+    if (result == NULL) {
+        closedir(pDir);
+        displayAlert("Couldn't allocate memory!");
+        return -1;
+    }
 
-			result[i] = strdup(pDirent->d_name);
-			if(result[i++] == NULL) {
-				closedir(pDir);
-				displayAlert("Couldn't allocate memory!");
-				exit(1);
-			}
-		}
-	}
+    while (1) {
+        errno = 0;
+        pDirent = readdir(pDir);
+        if (pDirent == NULL) {
+            if (errno != 0)
+                goto fail;
+            break;
+        }
 
-	closedir (pDir);
-	*target = result;
-	return i;
+        const char *name = pDirent->d_name;
+        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+            continue;
+        if (name[0] == '.' && hiddenFlag == 0)
+            continue;
+
+        if (count == capacity) {
+            if (capacity > INT_MAX / 2 ||
+                (size_t)capacity > SIZE_MAX / (2 * sizeof *result)) {
+                errno = EOVERFLOW;
+                goto fail;
+            }
+
+            int newCapacity = capacity * 2;
+            char **grown = realloc(result, (size_t)newCapacity * sizeof *result);
+            if (grown == NULL)
+                goto fail;
+            result = grown;
+            capacity = newCapacity;
+        }
+
+        result[count] = strdup(name);
+        if (result[count] == NULL)
+            goto fail;
+        ++count;
+    }
+
+    if (closedir(pDir) != 0) {
+        for (int j = 0; j < count; ++j)
+            free(result[j]);
+        free(result);
+        return -1;
+    }
+
+    *target = result;
+    return count;
+
+fail:
+    {
+        int savedErrno = errno;
+        closedir(pDir);
+        for (int j = 0; j < count; ++j)
+            free(result[j]);
+        free(result);
+        errno = savedErrno;
+        displayAlert("Unable to read directory entries");
+        return -1;
+    }
 }
 
-int compare (const void * a, const void * b ) {
-	char temp_filepath1[PATH_MAX];
-	char temp_filepath2[PATH_MAX];
+typedef struct {
+    char *name;
+    unsigned char isDirectory;
+} CflSortEntry;
 
-	snprintf(temp_filepath1, sizeof(temp_filepath1), "%s/%s", sort_dir, *(char **)a);
-	snprintf(temp_filepath2, sizeof(temp_filepath2), "%s/%s", sort_dir, *(char **)b);
-
-	int is_dir1 = (isRegularFile(temp_filepath1) == 0);
-	int is_dir2 = (isRegularFile(temp_filepath2) == 0);
-
-	if (is_dir1 != is_dir2) {
-		return is_dir2 - is_dir1;
-	}
-	return strcasecmp(*(char **)a, *(char **)b);
+static int CflCompareSortEntries(const void *left, const void *right) {
+    const CflSortEntry *a = left;
+    const CflSortEntry *b = right;
+    if (a->isDirectory != b->isDirectory)
+        return (int)b->isDirectory - (int)a->isDirectory;
+    return strcasecmp(a->name, b->name);
 }
+
+/* Probe each entry once instead of issuing stat() from every qsort comparison. */
+void sortFiles(char **files, int count, const char *directory) {
+    if (files == NULL || directory == NULL || count < 2)
+        return;
+    if ((size_t)count > SIZE_MAX / sizeof(CflSortEntry)) {
+        displayAlert("Directory is too large to sort");
+        return;
+    }
+
+    CflSortEntry *entries = malloc((size_t)count * sizeof *entries);
+    if (entries == NULL) {
+        displayAlert("Couldn't allocate sorting memory");
+        return;
+    }
+
+    for (int i = 0; i < count; ++i) {
+        char fullPath[PATH_MAX];
+        entries[i].name = files[i];
+        entries[i].isDirectory =
+            build_path(fullPath, sizeof fullPath, directory, files[i]) == 0 &&
+            isDirectory(fullPath);
+    }
+
+    qsort(entries, (size_t)count, sizeof *entries, CflCompareSortEntries);
+    for (int i = 0; i < count; ++i)
+        files[i] = entries[i].name;
+    free(entries);
+}
+
 
 void handleFlags(char** directories) {
 	if(clearFlag == 1){
@@ -172,65 +228,88 @@ void handleFlags(char** directories) {
 		clearFlagImg = 0;
 	}
 
-	if(searchFlag == 1){
-		searchFlag = 0;
-		last[strlen(last)-1] = '\0';
-		for(i=0; i<len; i++)
-			if(strcmp(directories[i],last) == 0) {
-				selection = i;
-				break;
-			}
-		if(len > maxy){
-			if(selection > maxy-3)
-				start = selection - maxy + 3;
-		}
+    if (searchFlag == 1) {
+        searchFlag = 0;
+        if (last != NULL) {
+            size_t lastLen = strlen(last);
+            if (lastLen > 0 && last[lastLen - 1] == '\n')
+                last[lastLen - 1] = '\0';
+            for (i = 0; i < len; ++i) {
+                if (strcmp(directories[i], last) == 0) {
+                    selection = i;
+                    break;
+                }
+            }
+        }
+        if (len > maxy && selection > maxy - 3)
+            start = selection - maxy + 3;
+        endwin();
+        refresh();
+    }
 
-		endwin();
-		refresh();
-	}
-
-	if(backFlag == 1){
-		backFlag = 0;
-		for(i=0; i<len; i++)
-			if(strcmp(directories[i],last) == 0) {
-				selection = i;
-				break;
-			}
-		if(len > maxy) {
-			if(selection > maxy-3)
-				start = selection - maxy + 3;
-		}
-	}
+    if (backFlag == 1) {
+        backFlag = 0;
+        if (last != NULL) {
+            for (i = 0; i < len; ++i) {
+                if (strcmp(directories[i], last) == 0) {
+                    selection = i;
+                    break;
+                }
+            }
+        }
+        if (len > maxy && selection > maxy - 3)
+            start = selection - maxy + 3;
+    }
 }
 
 // Moving this function to ui.h requires further refactoring
 void initWindows(void) {
-	int content_left, panel_top, panel_height, sep_col;
-	ui_get_layout(&content_left, &panel_top, &panel_height, &sep_col);
+    if (status_win) delwin(status_win);
+    if (current_win) delwin(current_win);
+    if (preview_win) delwin(preview_win);
+    if (keys_win) delwin(keys_win);
+    status_win = current_win = preview_win = keys_win = NULL;
 
-	int margin = UI_MARGIN;
-	int content_w = COLS - 2 * margin;
-	int left_w  = (content_w * 2) / 5 + 2;
-	int right_w = content_w - left_w - 1;
+    /* Leave enough room for both panes, status, and margins. */
+    if (LINES < 8 || COLS < 24)
+        return;
 
-	status_win = newwin(2, content_w, margin, content_left);
+    int content_left, panel_top, panel_height, sep_col;
+    ui_get_layout(&content_left, &panel_top, &panel_height, &sep_col);
 
-	starty = panel_top;
-	preview_start = sep_col;
+    int margin = UI_MARGIN;
+    int content_w = COLS - 2 * margin;
+    int left_w = (content_w * 2) / 5 + 2;
+    int right_w = content_w - left_w - 1;
+    if (content_w <= 0 || panel_height <= 0 || left_w <= 0 || right_w <= 0)
+        return;
 
-	current_win = newwin(panel_height, left_w,  starty, content_left);
-	preview_win = newwin(panel_height, right_w, starty, sep_col + 1);
+    status_win = newwin(2, content_w, margin, content_left);
+    current_win = newwin(panel_height, left_w, panel_top, content_left);
+    preview_win = newwin(panel_height, right_w, panel_top, sep_col + 1);
 
-	keypad(current_win, TRUE);
-	sigprocmask(SIG_UNBLOCK, &x, NULL);
+    if (!status_win || !current_win || !preview_win) {
+        if (status_win) delwin(status_win);
+        if (current_win) delwin(current_win);
+        if (preview_win) delwin(preview_win);
+        status_win = current_win = preview_win = NULL;
+        return;
+    }
 
-	ui_clear_gaps();
+    keypad(current_win, TRUE);
+    sigprocmask(SIG_UNBLOCK, &x, NULL);
+    ui_clear_gaps();
 }
 
 int isRegularFile(const char *path) {
 	struct stat st;
 	if (stat(path, &st) != 0) return 0;
 	return S_ISREG(st.st_mode);
+}
+
+int isDirectory(const char *path) {
+    struct stat st;
+    return path != NULL && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
 int isSymlink(const char *path) {
@@ -251,18 +330,21 @@ int readSymlinkTarget(const char *path, char *buf, size_t bufsz) {
 }
 
 void setSelectionCount(void) {
-	FILE *fp = fopen(clipboard_path, "r");
-	if( fp == NULL ) {
-		selectedFiles = 0;
-		return;
-	}
-	char buf[PATH_MAX];
-	int num = 0;
-	while(fgets(buf, PATH_MAX, (FILE*) fp)) {
-		num++;
-	}
-	selectedFiles = num;
-	fclose(fp);
+    FILE *fp = fopen(clipboard_path, "r");
+    if (fp == NULL) {
+        selectedFiles = 0;
+        return;
+    }
+
+    char buf[PATH_MAX * 3 + 1];
+    int num = 0;
+    int readResult;
+    while ((readResult = CflReadLine(fp, buf, sizeof buf)) > 0)
+        ++num;
+    if (readResult < 0)
+        displayAlert("Selection file contains an invalid record");
+    selectedFiles = num;
+    fclose(fp);
 }
 
 void init(int argc, char* argv[]) {
@@ -271,8 +353,17 @@ void init(int argc, char* argv[]) {
 
 	setlocale(LC_ALL, "");
 
-	uid_t uid = getuid();
-	info = getpwuid(uid);
+    uid_t uid = getuid();
+    info = getpwuid(uid);
+    const char *homeDir = getenv("HOME");
+    if (homeDir == NULL || homeDir[0] == '\0') {
+        if (info != NULL && info->pw_dir != NULL && info->pw_dir[0] != '\0')
+            homeDir = info->pw_dir;
+        else {
+            fprintf(stderr, "Cannot determine home directory\n");
+            exit(EXIT_FAILURE);
+        }
+    }
 
 	if( getenv("SHELL") == NULL) {
 		shell = malloc(10);
@@ -308,28 +399,38 @@ void init(int argc, char* argv[]) {
 		snprintf(editor, allocSize+1, "%s", getenv("EDITOR"));
 	}
 
-	struct stat st = {0};
-	if( getenv("XDG_CONFIG_HOME") == NULL) {
-		allocSize = snprintf(NULL,0,"%s/.config/cfl",info->pw_dir);
-		cache_path = malloc(allocSize+1);
-		if(cache_path == NULL) {
-			printf("%s\n", "Couldn't initialize cache path");
-			exit(1);
-		}
-		snprintf(cache_path,allocSize+1,"%s/.config/cfl",info->pw_dir);
-	} else {
-		allocSize = snprintf(NULL,0,"%s/cfl",getenv("XDG_CONFIG_HOME"));
-		cache_path = malloc(allocSize+1);
-		if(cache_path == NULL) {
-			printf("%s\n", "Couldn't initialize cache path");
-			exit(1);
-		}
-		snprintf(cache_path,allocSize+1,"%s/cfl",getenv("XDG_CONFIG_HOME"));
-	}
-	if (stat(cache_path, &st) == -1) {
-		mkdir(cache_path, 0751);
-	}
+    struct stat st = {0};
+    const char *configHome = getenv("XDG_CONFIG_HOME");
+    if (configHome == NULL || configHome[0] == '\0') {
+        allocSize = snprintf(NULL, 0, "%s/.config/cfl", homeDir);
+        cache_path = malloc((size_t)allocSize + 1);
+        if (cache_path != NULL)
+            snprintf(cache_path, (size_t)allocSize + 1, "%s/.config/cfl", homeDir);
+    } else {
+        allocSize = snprintf(NULL, 0, "%s/cfl", configHome);
+        cache_path = malloc((size_t)allocSize + 1);
+        if (cache_path != NULL)
+            snprintf(cache_path, (size_t)allocSize + 1, "%s/cfl", configHome);
+    }
+    if (cache_path == NULL) {
+        fprintf(stderr, "Couldn't initialize cache path\n");
+        exit(EXIT_FAILURE);
+    }
 
+    if (stat(cache_path, &st) != 0) {
+        if (errno != ENOENT || cfl_mkdir_p(cache_path, 0700) != 0) {
+            perror("Cannot create CFL configuration directory");
+            exit(EXIT_FAILURE);
+        }
+        if (stat(cache_path, &st) != 0) {
+            perror("Cannot access CFL configuration directory");
+            exit(EXIT_FAILURE);
+        }
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        fprintf(stderr, "CFL configuration path is not a directory: %s\n", cache_path);
+        exit(EXIT_FAILURE);
+    }
 	/* Remove legacy shared clipboard (pre session-local selection) */
 	{
 		char legacy_clipboard[PATH_MAX];
@@ -374,39 +475,55 @@ void init(int argc, char* argv[]) {
 		}
 		snprintf(trash_path, allocSize + 1, "%s/Trash", getenv("XDG_DATA_HOME"));
 	} else {
-		allocSize = snprintf(NULL, 0, "%s/.local/share/Trash", info->pw_dir);
+		allocSize = snprintf(NULL, 0, "%s/.local/share/Trash", homeDir);
 		trash_path = malloc(allocSize + 1);
 		if (trash_path == NULL) {
 			printf("%s\n", "Couldn't initialize trash path");
 			exit(1);
 		}
-		snprintf(trash_path, allocSize + 1, "%s/.local/share/Trash", info->pw_dir);
+		snprintf(trash_path, allocSize + 1, "%s/.local/share/Trash", homeDir);
 	}
 
-	char cwd[PATH_MAX];
-	if (getcwd(cwd, sizeof(cwd)) != NULL) {
-		snprintf(dir, sizeof(dir), "%s", cwd);
-	} else {
-		snprintf(dir, sizeof(dir), "/");
-	}
+    char cwd[PATH_MAX];
+    if (getcwd(cwd, sizeof cwd) == NULL) {
+        perror("Cannot determine current directory");
+        exit(EXIT_FAILURE);
+    }
+    if (snprintf(dir, sizeof dir, "%s", cwd) >= (int)sizeof dir) {
+        fprintf(stderr, "Current directory path too long\n");
+        exit(EXIT_FAILURE);
+    }
 
-	if(argc == 2) {
-		char arg[PATH_MAX];
-		snprintf(arg, sizeof(arg), "%s", argv[1]);
-		if(arg[0] == '/') {
-			if(strlen(arg) > 1 && arg[strlen(arg)-1] == '/') {
-				arg[strlen(arg)-1] = '\0';
-			}
-			snprintf(dir, sizeof(dir), "%s", arg);
-		} else {
-			char temp[PATH_MAX];
-			snprintf(temp, sizeof(temp), "%s/%s", dir, arg);
-			snprintf(dir, sizeof(dir), "%s", temp);
-		}
-	} else if(argc > 2) {
-		printf("Incorrect Usage!\n");
-		exit(1);
-	}
+    if (argc == 2) {
+        const char *argument = argv[1];
+        if (argument == NULL || strlen(argument) >= PATH_MAX) {
+            fprintf(stderr, "Directory argument is too long\n");
+            exit(EXIT_FAILURE);
+        }
+
+        if (argument[0] == '/') {
+            if (snprintf(dir, sizeof dir, "%s", argument) >= (int)sizeof dir) {
+                fprintf(stderr, "Directory argument is too long\n");
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            char target[PATH_MAX];
+            if (build_path(target, sizeof target, dir, argument) != 0 ||
+                snprintf(dir, sizeof dir, "%s", target) >= (int)sizeof dir) {
+                fprintf(stderr, "Directory argument is too long\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        struct stat targetStat;
+        if (stat(dir, &targetStat) != 0 || !S_ISDIR(targetStat.st_mode)) {
+            fprintf(stderr, "Not a readable directory: %s\n", dir);
+            exit(EXIT_FAILURE);
+        }
+    } else if (argc > 2) {
+        fprintf(stderr, "Usage: cfl [directory]\n");
+        exit(EXIT_FAILURE);
+    }
 	/* Selection starts empty each session; never restore a previous list */
 	selectedFiles = 0;
 }
@@ -415,101 +532,261 @@ int fileExists(char *file) {
     return (access(file, F_OK) != -1) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
-char* replace(char* str, char* a, char* b) {
-	int len  = strlen(str);
-	int lena = strlen(a);
-	int lenb = strlen(b);
-	char* p;
-	for (p = str; (p = strstr(p, a)); ++p) {
-		if (lena != lenb) // shift end as needed
-			memmove(p+lenb, p+lena, len - (p - str) + lenb);
-		memcpy(p, b, lenb);
-	}
-	return str;
+typedef struct {
+    char **items;
+    size_t count;
+    size_t capacity;
+    struct stat snapshot;
+    int valid;
+} CflSelectionCacheState;
+
+static CflSelectionCacheState CflSelectionCache = {0};
+
+static void CflSelectionCacheClear(void) {
+    for (size_t i = 0; i < CflSelectionCache.count; ++i)
+        free(CflSelectionCache.items[i]);
+    free(CflSelectionCache.items);
+    CflSelectionCache.items = NULL;
+    CflSelectionCache.count = 0;
+    CflSelectionCache.capacity = 0;
+    CflSelectionCache.valid = 0;
+}
+
+static int CflSelectionStatEqual(const struct stat *a, const struct stat *b) {
+    return a->st_dev == b->st_dev &&
+           a->st_ino == b->st_ino &&
+           a->st_size == b->st_size &&
+           a->st_mtim.tv_sec == b->st_mtim.tv_sec &&
+           a->st_mtim.tv_nsec == b->st_mtim.tv_nsec &&
+           a->st_ctim.tv_sec == b->st_ctim.tv_sec &&
+           a->st_ctim.tv_nsec == b->st_ctim.tv_nsec;
+}
+
+static int CflSelectionCacheAppend(const char *item) {
+    if (CflSelectionCache.count == CflSelectionCache.capacity) {
+        size_t newCapacity = CflSelectionCache.capacity ?
+            CflSelectionCache.capacity * 2 : 16;
+        if (newCapacity < CflSelectionCache.capacity ||
+            newCapacity > SIZE_MAX / sizeof *CflSelectionCache.items)
+            return -1;
+        char **grown = realloc(CflSelectionCache.items,
+                               newCapacity * sizeof *CflSelectionCache.items);
+        if (grown == NULL)
+            return -1;
+        CflSelectionCache.items = grown;
+        CflSelectionCache.capacity = newCapacity;
+    }
+
+    char *copy = strdup(item);
+    if (copy == NULL)
+        return -1;
+    CflSelectionCache.items[CflSelectionCache.count++] = copy;
+    return 0;
+}
+
+static int CflCompareSelectionStrings(const void *left, const void *right) {
+    const char *const *a = left;
+    const char *const *b = right;
+    return strcmp(*a, *b);
+}
+
+static int CflSelectionCacheLoad(void) {
+    struct stat before;
+    if (stat(clipboard_path, &before) != 0) {
+        CflSelectionCacheClear();
+        return errno == ENOENT ? 0 : -1;
+    }
+
+    if (CflSelectionCache.valid &&
+        CflSelectionStatEqual(&before, &CflSelectionCache.snapshot))
+        return 1;
+
+    CflSelectionCacheClear();
+    FILE *stream = fopen(clipboard_path, "r");
+    if (stream == NULL)
+        return -1;
+
+    char line[PATH_MAX * 3 + 1];
+    int readResult;
+    while ((readResult = CflReadLine(stream, line, sizeof line)) > 0) {
+        if (CflSelectionCacheAppend(line) != 0) {
+            fclose(stream);
+            CflSelectionCacheClear();
+            return -1;
+        }
+    }
+
+    int readFailed = readResult < 0 || ferror(stream);
+    if (fclose(stream) != 0)
+        readFailed = 1;
+    if (readFailed) {
+        CflSelectionCacheClear();
+        return -1;
+    }
+
+    if (CflSelectionCache.count > 1)
+        qsort(CflSelectionCache.items, CflSelectionCache.count,
+              sizeof *CflSelectionCache.items, CflCompareSelectionStrings);
+
+    struct stat after;
+    if (stat(clipboard_path, &after) != 0 ||
+        !CflSelectionStatEqual(&before, &after)) {
+        CflSelectionCacheClear();
+        return -1;
+    }
+
+    CflSelectionCache.snapshot = after;
+    CflSelectionCache.valid = 1;
+    return 1;
+}
+
+static int CflSelectionCacheContains(const char *item) {
+    size_t low = 0;
+    size_t high = CflSelectionCache.count;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        int order = strcmp(item, CflSelectionCache.items[middle]);
+        if (order == 0)
+            return 1;
+        if (order < 0)
+            high = middle;
+        else
+            low = middle + 1;
+    }
+    return 0;
+}
+
+static void CflSelectionCacheRecordAppend(const char *item) {
+    if (!CflSelectionCache.valid)
+        return;
+
+    size_t low = 0;
+    size_t high = CflSelectionCache.count;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        int order = strcmp(item, CflSelectionCache.items[middle]);
+        if (order == 0)
+            goto updateSnapshot;
+        if (order < 0)
+            high = middle;
+        else
+            low = middle + 1;
+    }
+
+    if (CflSelectionCache.count == CflSelectionCache.capacity) {
+        size_t newCapacity = CflSelectionCache.capacity ?
+            CflSelectionCache.capacity * 2 : 16;
+        if (newCapacity < CflSelectionCache.capacity ||
+            newCapacity > SIZE_MAX / sizeof *CflSelectionCache.items)
+            goto invalidate;
+        char **grown = realloc(CflSelectionCache.items,
+                               newCapacity * sizeof *CflSelectionCache.items);
+        if (grown == NULL)
+            goto invalidate;
+        CflSelectionCache.items = grown;
+        CflSelectionCache.capacity = newCapacity;
+    }
+
+    char *copy = strdup(item);
+    if (copy == NULL)
+        goto invalidate;
+    memmove(&CflSelectionCache.items[low + 1],
+            &CflSelectionCache.items[low],
+            (CflSelectionCache.count - low) * sizeof *CflSelectionCache.items);
+    CflSelectionCache.items[low] = copy;
+    CflSelectionCache.count++;
+
+updateSnapshot:
+    if (stat(clipboard_path, &CflSelectionCache.snapshot) == 0)
+        return;
+invalidate:
+    CflSelectionCacheClear();
 }
 
 int checkClipboard(char *filepath) {
-	FILE *f = fopen(clipboard_path, "r");
-	char buf[PATH_MAX];
-	char *temp = NULL;
-	allocSize = snprintf(NULL,0,"%s", filepath);
-	temp = malloc(allocSize+1);
-	if(temp == NULL) {
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(temp, allocSize+1, "%s", filepath);
-	temp[strlen(temp)]='\0';
-	if(f == NULL) {
-		free(temp);
-		return 0;
-	}
-	replace(temp,"\n","//");
-	while(fgets(buf, PATH_MAX, (FILE*) f)) {
-		buf[strlen(buf)-1] = '\0';
-		if(strcmp(temp,buf) == 0) {
-			free(temp);
-			fclose(f);
-			return 1;
-		}
-	}
-	fclose(f);
-	free(temp);
-	return 0;
+    if (filepath == NULL || clipboard_path == NULL)
+        return 0;
+
+    char encoded[PATH_MAX * 3 + 1];
+    if (CflEncodePath(filepath, encoded, sizeof encoded) != 0)
+        return 0;
+
+    int loaded = CflSelectionCacheLoad();
+    if (loaded <= 0)
+        return 0;
+    return CflSelectionCacheContains(encoded);
 }
 
 void writeClipboard(char *filepath) {
-	FILE *f = fopen(clipboard_path,"a+");
-	if (f == NULL) {
-		endwin();
-		printf("Error accessing clipboard!\n");
-		exit(1);
-	}
-	fprintf(f, "%s\n", filepath);
-	fclose(f);
+    if (filepath == NULL || clipboard_path == NULL)
+        return;
+    FILE *f = fopen(clipboard_path, "a");
+    if (f == NULL) {
+        displayAlert("Error accessing selection file");
+        return;
+    }
+
+    int failed = fprintf(f, "%s\n", filepath) < 0;
+    if (fclose(f) != 0)
+        failed = 1;
+    if (failed) {
+        CflSelectionCacheClear();
+        displayAlert("Error writing selection file");
+        return;
+    }
+    CflSelectionCacheRecordAppend(filepath);
 }
 
 void removeClipboard(char *filepath) {
-	FILE *f1;
-	FILE *f2;
-	char buf[PATH_MAX];
+    if (filepath == NULL || clipboard_path == NULL || temp_clipboard_path == NULL)
+        return;
+    FILE *f1 = fopen(clipboard_path, "r");
+    if (f1 == NULL) {
+        displayAlert("Couldn't open selection file");
+        return;
+    }
 
-	f1 = fopen(clipboard_path, "r");
-	f2 = fopen(temp_clipboard_path, "w");
-	if (f1 == NULL) {
-		endwin();
-		printf("Couldn't Open Clipboard File!\n");
-		exit(1);
-	}
-	if (f2 == NULL) {
-		endwin();
-		printf("Couldn't Create Temporary Clipboard File!\n");
-		fclose(f1); 
-		exit(1);
-	}
+    FILE *f2 = fopen(temp_clipboard_path, "w");
+    if (f2 == NULL) {
+        fclose(f1);
+        displayAlert("Couldn't create temporary selection file");
+        return;
+    }
 
-	while (fgets(buf, PATH_MAX, f1)) {
-		buf[strlen(buf) - 1] = '\0';
-		if (strcasecmp(buf, filepath) != 0)
-			fprintf(f2, "%s\n", buf);
-	}
+    char buf[PATH_MAX * 3 + 1];
+    int failed = 0;
+    int readResult;
+    while ((readResult = CflReadLine(f1, buf, sizeof buf)) > 0) {
+        if (strcmp(buf, filepath) != 0 && fprintf(f2, "%s\n", buf) < 0) {
+            failed = 1;
+            break;
+        }
+    }
+    if (readResult < 0 || ferror(f1))
+        failed = 1;
+    if (fclose(f2) != 0)
+        failed = 1;
+    fclose(f1);
 
-	fclose(f1);
-	fclose(f2);
+    if (failed) {
+        remove(temp_clipboard_path);
+        displayAlert("Couldn't update selection file");
+        return;
+    }
 
-	if (rename(temp_clipboard_path, clipboard_path) != 0) {
-		endwin();
-		perror("Couldn't move temporary clipboard file");
-		exit(1);
-	}
+    if (rename(temp_clipboard_path, clipboard_path) != 0) {
+        remove(temp_clipboard_path);
+        displayAlert("Couldn't replace selection file");
+    } else {
+        CflSelectionCacheClear();
+    }
 }
 
 void clearClipboard(void) {
-	/* Remove the session clipboard file so selection is fully gone */
-	if (clipboard_path)
-		remove(clipboard_path);
-	selectedFiles = 0;
+    if (clipboard_path)
+        remove(clipboard_path);
+    CflSelectionCacheClear();
+    selectedFiles = 0;
 }
 
 /* Mark every entry in the current directory listing (Shift+V). */
@@ -524,223 +801,294 @@ void selectAllFiles(char **directories, int n) {
 			continue;
 		if (checkClipboard(path) == 1)
 			continue;
-		char *temp = strdup(path);
-		if (!temp)
-			continue;
-		writeClipboard(replace(temp, "\n", "//"));
-		free(temp);
+        char encoded[PATH_MAX * 3 + 1];
+        if (CflEncodePath(path, encoded, sizeof encoded) != 0)
+            continue;
+        writeClipboard(encoded);
 	}
 	setSelectionCount();
 }
 
 void getParentPath(char *path) {
-	char *p;
-	p = strrchr(path,'/');
-	path[p-path] = '\0';
-	if(path[0] == '\0') {
-		path[0] = '/';
-		path[1] = '\0';
-	}
+    if (path == NULL || path[0] == '\0')
+        return;
+
+    char *slash = strrchr(path, '/');
+    if (slash == NULL) {
+        path[0] = '.';
+        path[1] = '\0';
+        return;
+    }
+    if (slash == path) {
+        path[1] = '\0';
+        return;
+    }
+    *slash = '\0';
 }
 
 int getWritePermissions(char *path) {
     return (access(path, W_OK) == 0) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
+int getParentWritePermissions(const char *path) {
+    if (path == NULL || path[0] == '\0')
+        return EXIT_SUCCESS;
+
+    char parent[PATH_MAX];
+    size_t len = strlen(path);
+    if (len >= sizeof parent)
+        return EXIT_SUCCESS;
+    memcpy(parent, path, len + 1);
+
+    char *slash = strrchr(parent, '/');
+    if (slash == NULL) {
+        memcpy(parent, ".", 2);
+    } else if (slash == parent) {
+        parent[1] = '\0';
+    } else {
+        *slash = '\0';
+    }
+
+    return access(parent, W_OK | X_OK) == 0 ? EXIT_FAILURE : EXIT_SUCCESS;
+}
+
+static int cfl_wait_child(pid_t pid) {
+    int status;
+    pid_t waited;
+
+    do {
+        waited = waitpid(pid, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+
+    if (waited < 0)
+        return -1;
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        return -1;
+    return 0;
+}
+
 void copyFiles(char *present_dir) {
-	FILE *f = fopen(clipboard_path, "r");
-	char buf[PATH_MAX];
-	int flag;
-	if(f == NULL) {
-		return;
-	}
+    FILE *f = fopen(clipboard_path, "r");
+    char buf[PATH_MAX * 3 + 1];
+    int flag;
+    int failed = 0;
 
-	/* Check write access on destination (not necessarily the browsed dir) */
-	if(getWritePermissions(present_dir) == 1) {
-		flag = 0;
-	} else {
-		flag = 1;
-	}
-	endwin();
-	while(fgets(buf, PATH_MAX, (FILE*) f)) {
-		buf[strlen(buf)-1] = '\0';
-		replace(buf,"//","\n");
-		pid_t pid = fork();
-		if(pid == 0) {
-			if(flag == 0) { 
-				execlp("cp", "cp", "-dirv", buf, present_dir, (char *)0);
-			} else {
-				execlp("sudo", "sudo", "cp", "-dirv", buf, present_dir, (char *)0);
-			}
-			exit(1);
-		} else {
-			int status;
-			waitpid(pid, &status, 0);
-		}
-	}
-	refresh();
-	fclose(f);
-	clearClipboard();
+    if (f == NULL)
+        return;
+
+    flag = getWritePermissions(present_dir) == 1 ? 0 : 1;
+    endwin();
+
+    int readResult;
+    while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
+        if (buf[0] == '\0')
+            continue;
+        CflDecodePath(buf);
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            if (flag == 0)
+                execlp("cp", "cp", "-dirv", "--", buf, present_dir, (char *)0);
+            else
+                execlp("sudo", "sudo", "cp", "-dirv", "--", buf, present_dir, (char *)0);
+            _exit(127);
+        }
+        if (pid < 0 || cfl_wait_child(pid) != 0)
+            failed = 1;
+    }
+    if (readResult < 0)
+        failed = 1;
+
+    fclose(f);
+    refresh();
+    if (!failed)
+        clearClipboard();
+    else
+        displayAlert("One or more copy operations failed; selection retained");
 }
 
-void removeFiles(void){
-	FILE *f = fopen(clipboard_path, "r");
-	char buf[PATH_MAX];
-	int flag;
-	if(f == NULL){
-		return;
-	}
-	endwin();
-	while(fgets(buf, PATH_MAX, (FILE*) f)){
-		buf[strlen(buf)-1] = '\0';
-		replace(buf,"//","\n");
-		if( getWritePermissions(buf) == 1 )
-			flag = 0;
-		else
-			flag = 1;
-		pid_t pid = fork();
-		if(pid == 0) {
-			if( flag == 0 ) 
-				execlp("rm", "rm", "-rfv", buf, (char *)0);
-			else
-				execlp("sudo", "sudo", "rm", "-rfv", buf, (char *)0);
-			exit(1);
-		}else{
-			int status;
-			waitpid(pid, &status, 0);
-		}
-	}
-	refresh();
-	fclose(f);
-	clearClipboard();
+void removeFiles(void) {
+    FILE *f = fopen(clipboard_path, "r");
+    char buf[PATH_MAX * 3 + 1];
+    int failed = 0;
+
+    if (f == NULL)
+        return;
+
+    endwin();
+
+    int readResult;
+    while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
+        if (buf[0] == '\0')
+            continue;
+        CflDecodePath(buf);
+
+        int flag = getParentWritePermissions(buf) == 1 ? 0 : 1;
+        pid_t pid = fork();
+        if (pid == 0) {
+            if (flag == 0)
+                execlp("rm", "rm", "-rfv", "--", buf, (char *)0);
+            else
+                execlp("sudo", "sudo", "rm", "-rfv", "--", buf, (char *)0);
+            _exit(127);
+        }
+        if (pid < 0 || cfl_wait_child(pid) != 0)
+            failed = 1;
+    }
+    if (readResult < 0)
+        failed = 1;
+
+    fclose(f);
+    refresh();
+    if (!failed)
+        clearClipboard();
+    else
+        displayAlert("One or more delete operations failed; selection retained");
 }
 
-void renameFiles(char **directories){
-	if( access( clipboard_path, F_OK ) == -1 ){
-		snprintf(temp_dir, sizeof(temp_dir), "%s/%s", dir, directories[selection]);
-		char *temp = strdup(temp_dir);
-		if(temp == NULL){
-			endwin();
-			printf("%s\n", "Couldn't allocate memory!");
-			exit(1);
-		}
-		writeClipboard(replace(temp,"\n","//"));
-		free(temp);
-	}
-	pid_t pid;
+void renameFiles(char **directories) {
+    if (clipboard_path == NULL || temp_clipboard_path == NULL)
+        return;
 
-	FILE *f = fopen(clipboard_path, "r");
-	FILE *f2;
+    if (access(clipboard_path, F_OK) != 0) {
+        if (directories == NULL || selection < 0 || selection >= len) {
+            displayAlert("No file selected");
+            return;
+        }
+        if (build_path(temp_dir, sizeof temp_dir, dir, directories[selection]) != 0) {
+            displayAlert("Selected path is too long");
+            return;
+        }
+        char encoded[PATH_MAX * 3 + 1];
+        if (CflEncodePath(temp_dir, encoded, sizeof encoded) != 0) {
+            displayAlert("Couldn't encode selected path");
+            return;
+        }
+        writeClipboard(encoded);
+    }
 
-	char *cmd = NULL;
+    FILE *source = fopen(clipboard_path, "r");
+    if (source == NULL) {
+        displayAlert("Couldn't open selection file");
+        return;
+    }
 
-	char buf[PATH_MAX];
-	char buf2[PATH_MAX];
+    FILE *temporary = fopen(temp_clipboard_path, "w");
+    if (temporary == NULL) {
+        fclose(source);
+        displayAlert("Couldn't create temporary selection file");
+        return;
+    }
 
-	int count = 0;
-	int count2 = 0;
+    char line[PATH_MAX * 3 + 1];
+    int readResult;
+    int failed = 0;
+    while ((readResult = CflReadLine(source, line, sizeof line)) > 0) {
+        if (fprintf(temporary, "%s\n", line) < 0) {
+            failed = 1;
+            break;
+        }
+    }
+    if (readResult < 0 || ferror(source))
+        failed = 1;
+    if (fclose(source) != 0)
+        failed = 1;
+    if (fclose(temporary) != 0)
+        failed = 1;
+    if (failed) {
+        remove(temp_clipboard_path);
+        displayAlert("Couldn't prepare selection editor");
+        return;
+    }
 
-	pid = fork();
-	if( pid == 0 ){
-		execlp("cp", "cp", clipboard_path, temp_clipboard_path, (char *)0);
-		exit(1);
-	} else {
-		int status;
-		waitpid(pid, &status, 0);
-	}
-	endwin();
+    endwin();
+    pid_t pid = fork();
+    if (pid == 0) {
+        execlp(editor, editor, temp_clipboard_path, (char *)0);
+        _exit(127);
+    }
+    if (pid < 0 || cfl_wait_child(pid) != 0) {
+        refresh();
+        remove(temp_clipboard_path);
+        displayAlert("Selection editor failed");
+        return;
+    }
 
-	allocSize = snprintf(NULL,0,"%s", editor);
-	cmd = malloc(allocSize + 1);
-	if(cmd == NULL){
-		endwin();
-		printf("%s\n", "Couldn't allocate memory!");
-		exit(1);
-	}
-	snprintf(cmd,allocSize+1,"%s", editor);
+    source = fopen(clipboard_path, "r");
+    temporary = fopen(temp_clipboard_path, "r");
+    if (source == NULL || temporary == NULL) {
+        if (source) fclose(source);
+        if (temporary) fclose(temporary);
+        refresh();
+        remove(temp_clipboard_path);
+        displayAlert("Couldn't read edited selection");
+        return;
+    }
 
-	pid = fork();
-	if( pid == 0 ) {
-		execlp(cmd, cmd, temp_clipboard_path, (char *)0);
-		exit(1);
-	} else {
-		int status;
-		waitpid(pid, &status, 0);
-		free(cmd);
-	}
+    char oldEncoded[PATH_MAX * 3 + 1];
+    char newEncoded[PATH_MAX * 3 + 1];
+    while (1) {
+        int oldResult = CflReadLine(source, oldEncoded, sizeof oldEncoded);
+        int newResult = CflReadLine(temporary, newEncoded, sizeof newEncoded);
+        if (oldResult == 0 && newResult == 0)
+            break;
+        if (oldResult != 1 || newResult != 1) {
+            failed = 1;
+            break;
+        }
 
-	while(fgets(buf, PATH_MAX, (FILE*) f)) {
-		count2=-1;
-		f2 = fopen(temp_clipboard_path,"r");
-		while(fgets(buf2, PATH_MAX, (FILE*) f2)) {
-			count2++;
-			if(buf[strlen(buf)-1] == '\n')
-				buf[strlen(buf)-1] = '\0';
-			if(count2 == count){
-				if(buf2[strlen(buf2)-1] == '\n')
-					buf2[strlen(buf2)-1] = '\0';
+        CflDecodePath(oldEncoded);
+        CflDecodePath(newEncoded);
+        if (strcmp(oldEncoded, newEncoded) == 0)
+            continue;
+        if (strlen(oldEncoded) >= PATH_MAX || strlen(newEncoded) >= PATH_MAX) {
+            failed = 1;
+            continue;
+        }
 
-				replace(buf2,"//","\n");
-				replace(buf,"//","\n");
+        struct stat destinationStat;
+        if (lstat(newEncoded, &destinationStat) == 0) {
+            fprintf(stderr, "Rename destination already exists: %s\n", newEncoded);
+            failed = 1;
+            continue;
+        }
+        if (errno != ENOENT) {
+            perror("Cannot inspect rename destination");
+            failed = 1;
+            continue;
+        }
 
-				pid = fork();
-				if( pid == 0 ) {
-					execlp("mv", "mv", "-ivn", buf, buf2, (char *)0);
-					exit(1);
-				} else {
-					int status;
-					waitpid(pid, &status, 0);
-				}
-			}
-		}
-		count++;
-		fclose(f2);
-	}
-	fclose(f);
+        pid = fork();
+        if (pid == 0) {
+            execlp("mv", "mv", "-n", "--", oldEncoded, newEncoded, (char *)0);
+            _exit(127);
+        }
+        if (pid < 0 || cfl_wait_child(pid) != 0) {
+            failed = 1;
+            continue;
+        }
 
-	clearClipboard();
-	remove(temp_clipboard_path);
+        struct stat sourceStat;
+        if (lstat(oldEncoded, &sourceStat) == 0 || errno != ENOENT)
+            failed = 1;
+    }
 
-	refresh();
-}
+    if (ferror(source) || ferror(temporary))
+        failed = 1;
+    fclose(source);
+    fclose(temporary);
+    remove(temp_clipboard_path);
+    refresh();
 
-void moveFiles(char *present_dir) {
-	FILE *f = fopen(clipboard_path, "r");
-	char buf[PATH_MAX];
-	char dest_path[PATH_MAX];
-
-	if (f == NULL) {
-		perror("Failed to open clipboard file");
-		return;
-	}
-
-	endwin();
-	while (fgets(buf, PATH_MAX, f)) {
-		// Remove the newline character
-		buf[strlen(buf) - 1] = '\0';
-		replace(buf, "//", "\n");
-
-		// Construct the destination path
-		const char *base = strrchr(buf, '/');
-		base = base ? base + 1 : buf;
-		snprintf(dest_path, PATH_MAX, "%s/%s", present_dir, base);
-
-		// Move the file
-		if (rename(buf, dest_path) != 0) {
-			perror("Error moving file");
-		} else {
-			printf("Moved: %s -> %s\n", buf, dest_path);
-		}
-	}
-
-	fclose(f);
-	refresh();
-	clearClipboard();
+    if (!failed)
+        clearClipboard();
+    else
+        displayAlert("Some rename operations failed; selection retained");
 }
 
 /* ---------- FreeDesktop Trash (home trash) ---------- */
 
-static int trash_mkdir_p(const char *path, mode_t mode) {
+static int cfl_mkdir_p(const char *path, mode_t mode) {
 	char tmp[PATH_MAX];
 	if (snprintf(tmp, sizeof tmp, "%s", path) >= (int)sizeof tmp)
 		return -1;
@@ -766,7 +1114,7 @@ static int trash_mkdir_p(const char *path, mode_t mode) {
 /* Ensure $trash, $trash/files, $trash/info exist (0700). Returns 0 on success. */
 static int trash_ensure_home(void) {
 	if (!trash_path) return -1;
-	if (trash_mkdir_p(trash_path, 0700) != 0)
+	if (cfl_mkdir_p(trash_path, 0700) != 0)
 		return -1;
 
 	char files_dir[PATH_MAX], info_dir[PATH_MAX];
@@ -875,34 +1223,31 @@ static int trash_write_info(int fd, const char *orig_path) {
 
 /* Move (or copy+delete on EXDEV) src into dest path. */
 static int trash_place_file(const char *src, const char *dest) {
-	if (rename(src, dest) == 0)
-		return 0;
-	if (errno != EXDEV)
-		return -1;
+    if (rename(src, dest) == 0)
+        return 0;
+    if (errno != EXDEV)
+        return -1;
 
-	/* Cross-device: copy then remove */
-	pid_t pid = fork();
-	if (pid < 0) return -1;
-	if (pid == 0) {
-		execlp("cp", "cp", "-a", src, dest, (char *)NULL);
-		_exit(127);
-	}
-	int status = 0;
-	waitpid(pid, &status, 0);
-	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-		return -1;
+    pid_t pid = fork();
+    if (pid < 0)
+        return -1;
+    if (pid == 0) {
+        execlp("cp", "cp", "-a", "--", src, dest, (char *)NULL);
+        _exit(127);
+    }
+    if (cfl_wait_child(pid) != 0)
+        return -1;
 
-	pid = fork();
-	if (pid < 0) {
-		/* Leave the copy in trash rather than lose both */
-		return 0;
-	}
-	if (pid == 0) {
-		execlp("rm", "rm", "-rf", src, (char *)NULL);
-		_exit(127);
-	}
-	waitpid(pid, &status, 0);
-	return 0;
+    pid = fork();
+    if (pid < 0)
+        return 1; /* Keep the complete trash copy and its metadata. */
+    if (pid == 0) {
+        execlp("rm", "rm", "-rf", "--", src, (char *)NULL);
+        _exit(127);
+    }
+    if (cfl_wait_child(pid) != 0)
+        return 1; /* Source removal may be partial; keep the complete copy. */
+    return 0;
 }
 
 /* Trash one absolute path into the FreeDesktop home trash. Returns 0 on success. */
@@ -939,11 +1284,12 @@ static int trash_one(const char *orig_path) {
 		return -1;
 	}
 
-	if (trash_place_file(orig_path, dest) != 0) {
-		unlink(info_path);
-		return -1;
-	}
-	return 0;
+    int placeResult = trash_place_file(orig_path, dest);
+    if (placeResult < 0) {
+        unlink(info_path);
+        return -1;
+    }
+    return placeResult;
 }
 
 /* Move clipboard selection into FreeDesktop Trash (not a raw dump folder). */
@@ -962,25 +1308,31 @@ void trashFiles(void) {
 
 	endwin();
 	int ok = 0, fail = 0;
-	char buf[PATH_MAX];
-	while (fgets(buf, PATH_MAX, f)) {
-		size_t L = strlen(buf);
-		if (L > 0 && buf[L - 1] == '\n')
-			buf[L - 1] = '\0';
-		replace(buf, "//", "\n");
-		if (trash_one(buf) == 0) {
-			printf("Trashed: %s\n", buf);
-			ok++;
-		} else {
-			perror(buf);
-			fail++;
-		}
-	}
-	fclose(f);
-	refresh();
-	clearClipboard();
+	char buf[PATH_MAX * 3 + 1];
+	int readResult;
+	while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
+		CflDecodePath(buf);
+        int trashResult = trash_one(buf);
+        if (trashResult == 0) {
+            printf("Trashed: %s\n", buf);
+            ok++;
+        } else if (trashResult > 0) {
+            fprintf(stderr, "Trash copy retained, but source removal failed: %s\n", buf);
+            ok++;
+            fail++;
+        } else {
+            perror(buf);
+            fail++;
+        }
+    }
+    if (readResult < 0)
+        fail++;
+    fclose(f);
+    refresh();
+    if (fail == 0 && ok > 0)
+        clearClipboard();
 
-	if (fail && ok)
+    if (fail && ok)
 		displayAlert("Some items failed to trash");
 	else if (fail && !ok)
 		displayAlert("Trash failed");
@@ -1152,14 +1504,22 @@ void prevPage(void) {
 }
 
 void goForward(void) {
-	if(len_preview != -1){
-		snprintf(dir, sizeof(dir), "%s", next_dir);
-		selection = 0;
-		start = 0;
-	} else {
-		openFile(next_dir);
-		clearFlag = 1;
-	}
+    if (isDirectory(next_dir)) {
+        if (len_preview < 0) {
+            displayAlert("Cannot read directory");
+            return;
+        }
+        if (snprintf(dir, sizeof dir, "%s", next_dir) >= (int)sizeof dir) {
+            displayAlert("Directory path too long");
+            return;
+        }
+        selection = 0;
+        start = 0;
+    } else {
+        openFile(next_dir);
+        preview_invalidate();
+        clearFlag = 1;
+    }
 }
 
 void goBack(void) {
@@ -1209,32 +1569,40 @@ void goMID(void) {
 
 /* Gets the last token from temp_dir by using `tokenizer` as a delimeter */
 void getLastToken(char *tokenizer) {
-	pch = strtok(temp_dir, tokenizer);
-	while (pch != NULL) {
-		free(last);
-		last = strdup(pch);
-		if(last == NULL) {
-			endwin();
-			printf("%s\n", "Couldn't allocate memory!");
-			exit(1);
-		}
-		pch = strtok(NULL,tokenizer);
-	}
+    free(last);
+    last = NULL;
+    pch = strtok(temp_dir, tokenizer);
+    while (pch != NULL) {
+        char *next = strdup(pch);
+        if (next == NULL) {
+            endwin();
+            fprintf(stderr, "Couldn't allocate last path component\n");
+            exit(EXIT_FAILURE);
+        }
+        free(last);
+        last = next;
+        pch = strtok(NULL, tokenizer);
+    }
 }
 
-void goShell(pid_t pid) {
-	pid = fork();
-	if( pid == 0 ) {
-		chdir(dir);
-		execlp(shell, shell, (char *)0);
-		exit(1);
-	} else {
-		int status;
-		waitpid(pid, &status, 0);
-	}
-
-	start = 0;
-	selection = 0;
+void goShell(pid_t ignoredPid) {
+    (void)ignoredPid;
+    pid_t pid = fork();
+    if (pid == 0) {
+        if (chdir(dir) != 0) {
+            perror("Cannot enter current directory in shell");
+            _exit(126);
+        }
+        execlp(shell, shell, (char *)0);
+        perror("Cannot launch shell");
+        _exit(127);
+    }
+    if (pid < 0) {
+        perror("Cannot fork shell");
+        return;
+    }
+    if (cfl_wait_child(pid) != 0)
+        fprintf(stderr, "Shell exited with an error\n");
 }
 
 void Deleting(void) {
@@ -1327,20 +1695,31 @@ void CreateDir() {
 }
 
 void openFile(char *filepath) {
+    if (filepath == NULL)
+        return;
+
     sigprocmask(SIG_BLOCK, &x, NULL);
-    pid_t pid;
-    pid = fork();
+    pid_t pid = fork();
     if (pid == 0) {
-        int null_fd = open("/dev/null", O_WRONLY);
-        dup2(null_fd,2);
-        execlp(FILE_OPENER, FILE_OPENER, filepath);
-        exit(1);
-    } else {
-        endwin();
-        int status;
-        waitpid(pid, &status, 0);
+        int nullFd = open("/dev/null", O_WRONLY);
+        if (nullFd >= 0) {
+            dup2(nullFd, STDERR_FILENO);
+            close(nullFd);
+        }
+        execlp(FILE_OPENER, FILE_OPENER, filepath, (char *)NULL);
+        _exit(127);
+    }
+    if (pid < 0) {
+        sigprocmask(SIG_UNBLOCK, &x, NULL);
+        perror("Cannot launch file opener");
         return;
     }
+
+    endwin();
+    if (cfl_wait_child(pid) != 0)
+        fprintf(stderr, "File opener failed: %s\n", filepath);
+    sigprocmask(SIG_UNBLOCK, &x, NULL);
+    refresh();
 }
 
 void help(WINDOW *main_win) {
@@ -1420,6 +1799,7 @@ static void save_lastdir(void) {
 }
 
 void WrappeUp(void) {
+    CflSelectionCacheClear();
 	/* Leave path for shell wrapper: cd to last dir after q */
 	save_lastdir();
 

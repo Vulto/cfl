@@ -2,6 +2,7 @@
 #define CFL_PREVIEW_H
 
 #include <ctype.h>
+#include "cfl_core.h"
 int preview_start;     /* column for preview pane start / right scrollbar position */
 int preview_scroll = 0; /* current scroll offset for preview pane (dir listings + text/hex) */
 long preview_total_lines = 0; /* cached total for current text/hex preview (lines or hex-rows) */
@@ -25,6 +26,13 @@ extern int readSymlinkTarget(const char *path, char *buf, size_t bufsz);
 
 /* Caching for preview target + totals (text line count or hex rows) */
 static char preview_target_path[PATH_MAX] = "";
+
+static void preview_invalidate(void) {
+    preview_target_path[0] = '\0';
+    preview_total_lines = 0;
+    preview_scroll = 0;
+}
+
 /* preview_total_lines is defined in functions.h and externed above */
 
 static unsigned img_be16(const unsigned char *p) {
@@ -208,6 +216,8 @@ static void ueberzugpp_start_once(void) {
     ueberzug_in = fdopen(pipefd[1], "w");
     if (!ueberzug_in) {
         close(pipefd[1]);
+        kill(ueberzug_pid, SIGTERM);
+        while (waitpid(ueberzug_pid, NULL, 0) < 0 && errno == EINTR) {}
         ueberzug_failed = 1;
         ueberzug_pid = -1;
         return;
@@ -217,13 +227,16 @@ static void ueberzugpp_start_once(void) {
 
 static void ueberzugpp_remove(void) {
     if (!ueberzug_in) return;
-    fprintf(ueberzug_in, "{\"action\":\"remove\",\"identifier\":\"%s\"}\n", UEBERZUGPP_IDENTIFIER);
-    fflush(ueberzug_in);
+
+    char escapedIdentifier[512];
+    if (CflJsonEscape(UEBERZUGPP_IDENTIFIER, escapedIdentifier, sizeof escapedIdentifier) == 0) {
+        fprintf(ueberzug_in, "{\"action\":\"remove\",\"identifier\":\"%s\"}\n", escapedIdentifier);
+        fflush(ueberzug_in);
+    }
     ueberzug_showing = 0;
     ueberzug_last_w = 0;
     ueberzug_last_h = 0;
 }
-
 /* Add/replace image. Clear only when needed:
  *  - not currently showing an image (nothing to skip)
  *  - new image smaller in width OR height than previous (ghosting)
@@ -243,24 +256,24 @@ static void ueberzugpp_add(const char *img_path) {
     int y = win_y + 1;
     int w = win_w - 2;
     int h = win_h - 2;
-
     if (w <= 0 || h <= 0) return;
+
+    char escapedPath[PATH_MAX * 6 + 1];
+    char escapedIdentifier[512];
+    if (CflJsonEscape(img_path, escapedPath, sizeof escapedPath) != 0 ||
+        CflJsonEscape(UEBERZUGPP_IDENTIFIER, escapedIdentifier, sizeof escapedIdentifier) != 0)
+        return;
 
     int iw = 0, ih = 0;
     int got_dims = image_dimensions(img_path, &iw, &ih);
-
     int need_clear = 0;
-    if (ueberzug_showing) {
-        if (!got_dims)
-            need_clear = 1;
-        else if (iw < ueberzug_last_w || ih < ueberzug_last_h)
-            need_clear = 1;
-    }
+    if (ueberzug_showing &&
+        (!got_dims || iw < ueberzug_last_w || ih < ueberzug_last_h))
+        need_clear = 1;
 
     if (need_clear) {
-        fprintf(ueberzug_in, "{\"action\":\"remove\",\"identifier\":\"%s\"}\n", UEBERZUGPP_IDENTIFIER);
+        fprintf(ueberzug_in, "{\"action\":\"remove\",\"identifier\":\"%s\"}\n", escapedIdentifier);
         fflush(ueberzug_in);
-        /* keep showing=false until add succeeds; dims updated below */
         ueberzug_showing = 0;
         ueberzug_last_w = 0;
         ueberzug_last_h = 0;
@@ -268,7 +281,7 @@ static void ueberzugpp_add(const char *img_path) {
 
     fprintf(ueberzug_in,
             "{\"action\":\"add\",\"identifier\":\"%s\",\"path\":\"%s\",\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d}\n",
-            UEBERZUGPP_IDENTIFIER, img_path, x, y, w, h);
+            escapedIdentifier, escapedPath, x, y, w, h);
     fflush(ueberzug_in);
 
     ueberzug_showing = 1;
@@ -276,7 +289,6 @@ static void ueberzugpp_add(const char *img_path) {
         ueberzug_last_w = iw;
         ueberzug_last_h = ih;
     } else {
-        /* Unknown size: force clear next time */
         ueberzug_last_w = 0;
         ueberzug_last_h = 0;
     }
@@ -290,7 +302,7 @@ static void ueberzugpp_stop(void) {
     }
     if (ueberzug_pid > 0) {
         kill(ueberzug_pid, SIGTERM);
-        waitpid(ueberzug_pid, NULL, WNOHANG);
+        while (waitpid(ueberzug_pid, NULL, 0) < 0 && errno == EINTR) {}
         ueberzug_pid = -1;
     }
 }
@@ -309,25 +321,31 @@ static void preview_print_message(const char *message, int maxx) {
 }
 
 static int getMIME(const char *filepath, char mime[128]) {
-    magic_t magic = magic_open(MAGIC_MIME_TYPE);
-    if (magic == NULL) {
+    static magic_t cookie = NULL;
+    static int initializationFailed = 0;
+    if (filepath == NULL || mime == NULL || initializationFailed)
         return -1;
+
+    if (cookie == NULL) {
+        cookie = magic_open(MAGIC_MIME_TYPE);
+        if (cookie == NULL) {
+            initializationFailed = 1;
+            return -1;
+        }
+        if (magic_load(cookie, NULL) != 0) {
+            magic_close(cookie);
+            cookie = NULL;
+            initializationFailed = 1;
+            return -1;
+        }
     }
 
-    if (magic_load(magic, NULL) != 0) {
-        magic_close(magic);
+    const char *mimeType = magic_file(cookie, filepath);
+    if (mimeType == NULL)
         return -1;
-    }
 
-    const char *mime_type = magic_file(magic, filepath);
-    if (mime_type == NULL) {
-        magic_close(magic);
-        return -1;
-    }
-
-    snprintf(mime, 128, "%s", mime_type);
-    magic_close(magic);
-    return 0;
+    int written = snprintf(mime, 128, "%s", mimeType);
+    return written < 0 || written >= 128 ? -1 : 0;
 }
 
 /* Fast line counter (called only on preview target change for perf) */
@@ -598,7 +616,7 @@ void PreviewNextDir(char *next_dir_arg, char **next_directories) {
         int y = i - start + 1;
         wmove(preview_win, y, 2);
         snprintf(temp_dir, sizeof(temp_dir), "%s/%s", next_dir_arg, next_directories[i]);
-        if (isRegularFile(temp_dir) == 0) {
+        if (isDirectory(temp_dir)) {
             wattron(preview_win, A_BOLD);
         } else {
             wattroff(preview_win, A_BOLD);

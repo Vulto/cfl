@@ -15,7 +15,7 @@ int selectedFiles = 0;
 int selection = 0;
 int len = 0;
 char dir  [PATH_MAX];
-char selected_file[NAME_MAX];
+char selected_file[NAME_MAX + 1];
 int start = 0;
 /* When set, right pane shows file info instead of previews/images */
 int fileInfoMode = 0;
