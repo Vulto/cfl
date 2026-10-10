@@ -107,9 +107,9 @@ int main(int argc, char* argv[]) {
         }
 
         if (len > 0) {
-            snprintf(selected_file, NAME_MAX, "%s", directories[selection]);
+            snprintf(selected_file, sizeof selected_file, "%s", directories[selection]);
         } else {
-            snprintf(selected_file, NAME_MAX, "%s", "Empty");
+            snprintf(selected_file, sizeof selected_file, "%s", "Empty");
         }
 
         displayStatus();
