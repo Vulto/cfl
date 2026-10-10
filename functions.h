@@ -474,6 +474,167 @@ int fileExists(char *file) {
     return (access(file, F_OK) != -1) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
+typedef struct {
+    char **items;
+    size_t count;
+    size_t capacity;
+    struct stat snapshot;
+    int valid;
+} CflSelectionCacheState;
+
+static CflSelectionCacheState CflSelectionCache = {0};
+
+static void CflSelectionCacheClear(void) {
+    for (size_t i = 0; i < CflSelectionCache.count; ++i)
+        free(CflSelectionCache.items[i]);
+    free(CflSelectionCache.items);
+    CflSelectionCache.items = NULL;
+    CflSelectionCache.count = 0;
+    CflSelectionCache.capacity = 0;
+    CflSelectionCache.valid = 0;
+}
+
+static int CflSelectionStatEqual(const struct stat *a, const struct stat *b) {
+    return a->st_dev == b->st_dev &&
+           a->st_ino == b->st_ino &&
+           a->st_size == b->st_size &&
+           a->st_mtim.tv_sec == b->st_mtim.tv_sec &&
+           a->st_mtim.tv_nsec == b->st_mtim.tv_nsec &&
+           a->st_ctim.tv_sec == b->st_ctim.tv_sec &&
+           a->st_ctim.tv_nsec == b->st_ctim.tv_nsec;
+}
+
+static int CflSelectionCacheAppend(const char *item) {
+    if (CflSelectionCache.count == CflSelectionCache.capacity) {
+        size_t newCapacity = CflSelectionCache.capacity ?
+            CflSelectionCache.capacity * 2 : 16;
+        if (newCapacity < CflSelectionCache.capacity ||
+            newCapacity > SIZE_MAX / sizeof *CflSelectionCache.items)
+            return -1;
+        char **grown = realloc(CflSelectionCache.items,
+                               newCapacity * sizeof *CflSelectionCache.items);
+        if (grown == NULL)
+            return -1;
+        CflSelectionCache.items = grown;
+        CflSelectionCache.capacity = newCapacity;
+    }
+
+    char *copy = strdup(item);
+    if (copy == NULL)
+        return -1;
+    CflSelectionCache.items[CflSelectionCache.count++] = copy;
+    return 0;
+}
+
+static int CflSelectionCacheLoad(void) {
+    struct stat before;
+    if (stat(clipboard_path, &before) != 0) {
+        CflSelectionCacheClear();
+        return errno == ENOENT ? 0 : -1;
+    }
+
+    if (CflSelectionCache.valid &&
+        CflSelectionStatEqual(&before, &CflSelectionCache.snapshot))
+        return 1;
+
+    CflSelectionCacheClear();
+    FILE *stream = fopen(clipboard_path, "r");
+    if (stream == NULL)
+        return -1;
+
+    char line[PATH_MAX * 3 + 1];
+    int readResult;
+    while ((readResult = CflReadLine(stream, line, sizeof line)) > 0) {
+        if (CflSelectionCacheAppend(line) != 0) {
+            fclose(stream);
+            CflSelectionCacheClear();
+            return -1;
+        }
+    }
+
+    int readFailed = readResult < 0 || ferror(stream);
+    if (fclose(stream) != 0)
+        readFailed = 1;
+    if (readFailed) {
+        CflSelectionCacheClear();
+        return -1;
+    }
+
+    struct stat after;
+    if (stat(clipboard_path, &after) != 0 ||
+        !CflSelectionStatEqual(&before, &after)) {
+        CflSelectionCacheClear();
+        return -1;
+    }
+
+    CflSelectionCache.snapshot = after;
+    CflSelectionCache.valid = 1;
+    return 1;
+}
+
+static int CflSelectionCacheContains(const char *item) {
+    size_t low = 0;
+    size_t high = CflSelectionCache.count;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        int order = strcmp(item, CflSelectionCache.items[middle]);
+        if (order == 0)
+            return 1;
+        if (order < 0)
+            high = middle;
+        else
+            low = middle + 1;
+    }
+    return 0;
+}
+
+static void CflSelectionCacheRecordAppend(const char *item) {
+    if (!CflSelectionCache.valid)
+        return;
+
+    size_t low = 0;
+    size_t high = CflSelectionCache.count;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        int order = strcmp(item, CflSelectionCache.items[middle]);
+        if (order == 0)
+            goto updateSnapshot;
+        if (order < 0)
+            high = middle;
+        else
+            low = middle + 1;
+    }
+
+    if (CflSelectionCache.count == CflSelectionCache.capacity) {
+        size_t newCapacity = CflSelectionCache.capacity ?
+            CflSelectionCache.capacity * 2 : 16;
+        if (newCapacity < CflSelectionCache.capacity ||
+            newCapacity > SIZE_MAX / sizeof *CflSelectionCache.items)
+            goto invalidate;
+        char **grown = realloc(CflSelectionCache.items,
+                               newCapacity * sizeof *CflSelectionCache.items);
+        if (grown == NULL)
+            goto invalidate;
+        CflSelectionCache.items = grown;
+        CflSelectionCache.capacity = newCapacity;
+    }
+
+    char *copy = strdup(item);
+    if (copy == NULL)
+        goto invalidate;
+    memmove(&CflSelectionCache.items[low + 1],
+            &CflSelectionCache.items[low],
+            (CflSelectionCache.count - low) * sizeof *CflSelectionCache.items);
+    CflSelectionCache.items[low] = copy;
+    CflSelectionCache.count++;
+
+updateSnapshot:
+    if (stat(clipboard_path, &CflSelectionCache.snapshot) == 0)
+        return;
+invalidate:
+    CflSelectionCacheClear();
+}
+
 int checkClipboard(char *filepath) {
     if (filepath == NULL || clipboard_path == NULL)
         return 0;
@@ -482,32 +643,28 @@ int checkClipboard(char *filepath) {
     if (CflEncodePath(filepath, encoded, sizeof encoded) != 0)
         return 0;
 
-    FILE *f = fopen(clipboard_path, "r");
-    if (f == NULL)
+    int loaded = CflSelectionCacheLoad();
+    if (loaded <= 0)
         return 0;
-
-    char buf[PATH_MAX * 3 + 1];
-    int readResult;
-    while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
-        if (strcmp(encoded, buf) == 0) {
-            fclose(f);
-            return 1;
-        }
-    }
-
-    fclose(f);
-    return 0;
+    return CflSelectionCacheContains(encoded);
 }
 
 void writeClipboard(char *filepath) {
-	FILE *f = fopen(clipboard_path,"a+");
-	if (f == NULL) {
-		endwin();
-		printf("Error accessing clipboard!\n");
-		exit(1);
-	}
-	fprintf(f, "%s\n", filepath);
-	fclose(f);
+    FILE *f = fopen(clipboard_path, "a");
+    if (f == NULL) {
+        displayAlert("Error accessing selection file");
+        return;
+    }
+
+    int failed = fprintf(f, "%s\n", filepath) < 0;
+    if (fclose(f) != 0)
+        failed = 1;
+    if (failed) {
+        CflSelectionCacheClear();
+        displayAlert("Error writing selection file");
+        return;
+    }
+    CflSelectionCacheRecordAppend(filepath);
 }
 
 void removeClipboard(char *filepath) {
@@ -548,14 +705,16 @@ void removeClipboard(char *filepath) {
     if (rename(temp_clipboard_path, clipboard_path) != 0) {
         remove(temp_clipboard_path);
         displayAlert("Couldn't replace selection file");
+    } else {
+        CflSelectionCacheClear();
     }
 }
 
 void clearClipboard(void) {
-	/* Remove the session clipboard file so selection is fully gone */
-	if (clipboard_path)
-		remove(clipboard_path);
-	selectedFiles = 0;
+    if (clipboard_path)
+        remove(clipboard_path);
+    CflSelectionCacheClear();
+    selectedFiles = 0;
 }
 
 /* Mark every entry in the current directory listing (Shift+V). */
