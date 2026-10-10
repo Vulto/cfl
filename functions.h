@@ -353,8 +353,8 @@ void init(int argc, char* argv[]) {
     info = getpwuid(uid);
     const char *homeDir = getenv("HOME");
     if (homeDir == NULL || homeDir[0] == '\0') {
-        if (info != NULL && homeDir != NULL && homeDir[0] != '\0')
-            homeDir = homeDir;
+        if (info != NULL && info->pw_dir != NULL && info->pw_dir[0] != '\0')
+            homeDir = info->pw_dir;
         else {
             fprintf(stderr, "Cannot determine home directory\n");
             exit(EXIT_FAILURE);
