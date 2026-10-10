@@ -5,19 +5,35 @@ int main(int argc, char* argv[]) {
     cursesInit();
 
     int ch = 0;
+    int reloadDirectory = 1;
+    int filled = 0;
+    char **directories = NULL;
+    char cachedDirectory[PATH_MAX] = {0};
 
-    while(ch != KEY_ESCAPE) {
-        char **directories = NULL;
-        int filled = getFiles(dir, &directories);
-        if (filled == -1) {
-            displayAlert("Couldn't open directory");
-            break;
+    while (ch != KEY_ESCAPE) {
+        if (reloadDirectory || strcmp(cachedDirectory, dir) != 0) {
+            if (directories != NULL) {
+                for (int j = 0; j < filled; ++j)
+                    free(directories[j]);
+                free(directories);
+                directories = NULL;
+            }
+
+            filled = getFiles(dir, &directories);
+            if (filled < 0) {
+                displayAlert("Couldn't read directory");
+                break;
+            }
+            if (snprintf(cachedDirectory, sizeof cachedDirectory, "%s", dir) >=
+                (int)sizeof cachedDirectory) {
+                displayAlert("Directory path too long");
+                break;
+            }
+            if (filled > 0)
+                sortFiles(directories, filled, dir);
+            reloadDirectory = 0;
         }
         len = filled;
-
-        if( len > 0 ) {
-            sortFiles(directories, len, dir);
-        }
 
         if(selection > len-1) {
             selection = len-1;
@@ -184,9 +200,13 @@ int main(int argc, char* argv[]) {
             case KEY_BOTTOM: goBOTTOM(); break;
             case KEY_MID: goMID(); break;
             case KEY_SHELL:
-                ueberzugpp_remove(); endwin(); goShell(pid); start = 0; selection = 0; refresh(); break;
+                ueberzugpp_remove(); endwin(); goShell(pid); start = 0; selection = 0; refresh();
+                reloadDirectory = 1;
+                break;
             case KEY_RENAME:
-                ueberzugpp_remove(); renameFiles(directories); break;
+                ueberzugpp_remove(); renameFiles(directories);
+                reloadDirectory = 1;
+                break;
             case KEY_SEL: {
                 if (len <= 0) { break; }
                 if (build_path(temp_dir, sizeof temp_dir, dir, directories[selection]) != 0) {
@@ -213,17 +233,23 @@ int main(int argc, char* argv[]) {
                 break;
 			case '?': help(stdscr); break;
             case KEY_EMPTYSEL: clearClipboard(); setSelectionCount(); break;
-            case KEY_PASTE: copyFiles(dir); break;
-            case KEY_MV: moveFiles(dir); break;
+            case KEY_RELOAD: reloadDirectory = 1; break;
+            case KEY_PASTE: copyFiles(dir); reloadDirectory = 1; break;
+            case KEY_MV: moveFiles(dir); reloadDirectory = 1; break;
             case KEY_MOVETO:
                 ueberzugpp_remove();
                 show_move_to();
+                reloadDirectory = 1;
                 break;
             case KEY_COPYTO:
                 ueberzugpp_remove();
                 show_copy_to();
+                reloadDirectory = 1;
                 break;
-            case KEY_REMOVEMENU: ueberzugpp_remove(); Deleting(); break;
+            case KEY_REMOVEMENU:
+                ueberzugpp_remove(); Deleting();
+                reloadDirectory = 1;
+                break;
             case KEY_VIEWSEL: endwin(); ViewSel(pid); break;
             case KEY_EDITSEL: EditSel(pid); break;
             case KEY_INFO:
@@ -232,7 +258,10 @@ int main(int argc, char* argv[]) {
                     ueberzugpp_remove();
                 clearFlagImg = 1;
                 break;
-            case KEY_TOGGLEHIDE: hiddenFlag = !hiddenFlag; start = 0; selection = 0; break;
+            case KEY_TOGGLEHIDE:
+                hiddenFlag = !hiddenFlag; start = 0; selection = 0;
+                reloadDirectory = 1;
+                break;
             case KEY_BOOKMARK: go_bookmark(); break;
             case KEY_ADDBOOKMARK: add_bookmark(); break;
             case KEY_RMBOOKMARK: remove_bookmark_prompt(); break;
@@ -240,20 +269,22 @@ int main(int argc, char* argv[]) {
             case KEY_DELETE_SEARCH:
                 ueberzugpp_remove();
                 show_delete_search(directories, len);
+                reloadDirectory = 1;
                 break;
-            case KEY_DIR: CreateDir(); break;
+            case KEY_DIR: CreateDir(); reloadDirectory = 1; break;
         }
 
         for(i=0; i<(len_preview > 0 ? len_preview : 0); i++) {
             free(next_directories[i]);
         }
-        for(i=0; i<len; i++) {
-            free(directories[i]);
-        }
         free(next_directories);
-        free(directories);
     }
 
+    if (directories != NULL) {
+        for (int j = 0; j < filled; ++j)
+            free(directories[j]);
+        free(directories);
+    }
     WrappeUp();
     return EXIT_SUCCESS;
 }
