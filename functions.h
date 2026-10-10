@@ -112,7 +112,15 @@ int getFiles(char *directory, char ***target) {
         return -1;
     }
 
-    while ((pDirent = readdir(pDir)) != NULL) {
+    while (1) {
+        errno = 0;
+        pDirent = readdir(pDir);
+        if (pDirent == NULL) {
+            if (errno != 0)
+                goto fail;
+            break;
+        }
+
         const char *name = pDirent->d_name;
         if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
             continue;
