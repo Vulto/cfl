@@ -45,6 +45,7 @@ int main(void) {
     assert(isDirectory(filePath) == 0);
 
     char linkPath[PATH_MAX];
+    assert(build_path(path, sizeof path, root, "folder") == 0);
     assert(build_path(linkPath, sizeof linkPath, root, "dirlink") == 0);
     assert(symlink(path, linkPath) == 0);
     assert(isDirectory(linkPath) == 1);
