@@ -1781,6 +1781,7 @@ static void save_lastdir(void) {
 }
 
 void WrappeUp(void) {
+    CflSelectionCacheClear();
 	/* Leave path for shell wrapper: cd to last dir after q */
 	save_lastdir();
 
