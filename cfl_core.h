@@ -79,6 +79,60 @@ static inline int CflJsonEscape(const char *src, char *dst, size_t dstSize) {
     return 0;
 }
 
+/* Percent-encode the two bytes that have special meaning in selection records. */
+static inline int CflEncodePath(const char *src, char *dst, size_t dstSize) {
+    if (src == NULL || dst == NULL || dstSize == 0)
+        return -1;
+
+    size_t out = 0;
+    for (const unsigned char *p = (const unsigned char *)src; *p != 0; ++p) {
+        if (*p == '%' || *p == '\n') {
+            if (dstSize - out <= 3) {
+                dst[0] = '\0';
+                return -1;
+            }
+            dst[out++] = '%';
+            dst[out++] = *p == '%' ? '2' : '0';
+            dst[out++] = *p == '%' ? '5' : 'A';
+        } else {
+            if (dstSize - out <= 1) {
+                dst[0] = '\0';
+                return -1;
+            }
+            dst[out++] = (char)*p;
+        }
+    }
+    dst[out] = '\0';
+    return 0;
+}
+
+/* Decode CflEncodePath in place; unknown percent sequences remain unchanged. */
+static inline void CflDecodePath(char *path) {
+    if (path == NULL)
+        return;
+
+    char *readPos = path;
+    char *writePos = path;
+    while (*readPos != '\0') {
+        if (readPos[0] == '%' && readPos[1] != '\0' && readPos[2] != '\0') {
+            char first = readPos[1];
+            char second = readPos[2];
+            if (first == '2' && second == '5') {
+                *writePos++ = '%';
+                readPos += 3;
+                continue;
+            }
+            if (first == '0' && (second == 'A' || second == 'a')) {
+                *writePos++ = '\n';
+                readPos += 3;
+                continue;
+            }
+        }
+        *writePos++ = *readPos++;
+    }
+    *writePos = '\0';
+}
+
 /* Read one complete newline-delimited record; safely handle EOF and blank lines. */
 static inline int CflReadLine(FILE *stream, char *dst, size_t dstSize) {
     if (stream == NULL || dst == NULL || dstSize < 2)
