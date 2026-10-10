@@ -1690,20 +1690,30 @@ void CreateDir() {
 }
 
 void openFile(char *filepath) {
+    if (filepath == NULL)
+        return;
+
     sigprocmask(SIG_BLOCK, &x, NULL);
-    pid_t pid;
-    pid = fork();
+    pid_t pid = fork();
     if (pid == 0) {
-        int null_fd = open("/dev/null", O_WRONLY);
-        dup2(null_fd,2);
-        execlp(FILE_OPENER, FILE_OPENER, filepath);
-        exit(1);
-    } else {
-        endwin();
-        int status;
-        waitpid(pid, &status, 0);
+        int nullFd = open("/dev/null", O_WRONLY);
+        if (nullFd >= 0) {
+            dup2(nullFd, STDERR_FILENO);
+            close(nullFd);
+        }
+        execlp(FILE_OPENER, FILE_OPENER, filepath, (char *)NULL);
+        _exit(127);
+    }
+    if (pid < 0) {
+        sigprocmask(SIG_UNBLOCK, &x, NULL);
+        perror("Cannot launch file opener");
         return;
     }
+
+    endwin();
+    if (cfl_wait_child(pid) != 0)
+        fprintf(stderr, "File opener failed: %s\n", filepath);
+    sigprocmask(SIG_UNBLOCK, &x, NULL);
 }
 
 void help(WINDOW *main_win) {
