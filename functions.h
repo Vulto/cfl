@@ -1516,6 +1516,7 @@ void goForward(void) {
         start = 0;
     } else {
         openFile(next_dir);
+        preview_invalidate();
         clearFlag = 1;
     }
 }
