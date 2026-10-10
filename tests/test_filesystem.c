@@ -31,6 +31,22 @@ int main(void) {
     MakeFile(path);
     assert(build_path(path, sizeof path, root, "folder") == 0);
     assert(mkdir(path, 0700) == 0);
+    assert(isDirectory(path) == 1);
+
+    char filePath[PATH_MAX];
+    assert(build_path(filePath, sizeof filePath, root, "alpha") == 0);
+    assert(isDirectory(filePath) == 0);
+
+    char linkPath[PATH_MAX];
+    assert(build_path(linkPath, sizeof linkPath, root, "dirlink") == 0);
+    assert(symlink(path, linkPath) == 0);
+    assert(isDirectory(linkPath) == 1);
+    assert(unlink(linkPath) == 0);
+
+    assert(build_path(linkPath, sizeof linkPath, root, "brokenlink") == 0);
+    assert(symlink("/nonexistent/cfl-target", linkPath) == 0);
+    assert(isDirectory(linkPath) == 0);
+    assert(unlink(linkPath) == 0);
 
     char **entries = NULL;
     hiddenFlag = 1;
