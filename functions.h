@@ -310,18 +310,21 @@ int readSymlinkTarget(const char *path, char *buf, size_t bufsz) {
 }
 
 void setSelectionCount(void) {
-	FILE *fp = fopen(clipboard_path, "r");
-	if( fp == NULL ) {
-		selectedFiles = 0;
-		return;
-	}
-	char buf[PATH_MAX];
-	int num = 0;
-	while(fgets(buf, PATH_MAX, (FILE*) fp)) {
-		num++;
-	}
-	selectedFiles = num;
-	fclose(fp);
+    FILE *fp = fopen(clipboard_path, "r");
+    if (fp == NULL) {
+        selectedFiles = 0;
+        return;
+    }
+
+    char buf[PATH_MAX * 3 + 1];
+    int num = 0;
+    int readResult;
+    while ((readResult = CflReadLine(fp, buf, sizeof buf)) > 0)
+        ++num;
+    if (readResult < 0)
+        displayAlert("Selection file contains an invalid record");
+    selectedFiles = num;
+    fclose(fp);
 }
 
 void init(int argc, char* argv[]) {
