@@ -250,40 +250,33 @@ static void ueberzugpp_add(const char *img_path) {
     int y = win_y + 1;
     int w = win_w - 2;
     int h = win_h - 2;
-
     if (w <= 0 || h <= 0) return;
 
-    int iw = 0, ih = 0;
-    int got_dims = image_dimensions(img_path, &iw, &ih);
-
-    int need_clear = 0;
-    if (ueberzug_showing) {
-        if (!got_dims)
-            need_clear = 1;
-        else if (iw < ueberzug_last_w || ih < ueberzug_last_h)
-            need_clear = 1;
-    }
-
-    if (need_clear) {
-        char escapedPath[PATH_MAX * 6 + 1];
+    char escapedPath[PATH_MAX * 6 + 1];
     char escapedIdentifier[512];
     if (CflJsonEscape(img_path, escapedPath, sizeof escapedPath) != 0 ||
         CflJsonEscape(UEBERZUGPP_IDENTIFIER, escapedIdentifier, sizeof escapedIdentifier) != 0)
         return;
 
-    fprintf(ueberzug_in,
-            "{\\"action\\":\\"add\\",\\"identifier\\":\\"%s\\",\\"path\\":\\"%s\\",\\"x\\":%d,\\"y\\":%d,\\"width\\":%d,\\"height\\":%d}\\n",
-            escapedIdentifier, escapedPath, x, y, w, h);
-    fflush(ueberzug_in);
-        /* keep showing=false until add succeeds; dims updated below */
+    int iw = 0, ih = 0;
+    int got_dims = image_dimensions(img_path, &iw, &ih);
+    int need_clear = 0;
+    if (ueberzug_showing) {
+        if (!got_dims || iw < ueberzug_last_w || ih < ueberzug_last_h)
+            need_clear = 1;
+    }
+
+    if (need_clear) {
+        fprintf(ueberzug_in, "{\\"action\\":\\"remove\\",\\"identifier\\":\\"%s\\"}\\n", escapedIdentifier);
+        fflush(ueberzug_in);
         ueberzug_showing = 0;
         ueberzug_last_w = 0;
         ueberzug_last_h = 0;
     }
 
     fprintf(ueberzug_in,
-            "{\"action\":\"add\",\"identifier\":\"%s\",\"path\":\"%s\",\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d}\n",
-            UEBERZUGPP_IDENTIFIER, img_path, x, y, w, h);
+            "{\\"action\\":\\"add\\",\\"identifier\\":\\"%s\\",\\"path\\":\\"%s\\",\\"x\\":%d,\\"y\\":%d,\\"width\\":%d,\\"height\\":%d}\\n",
+            escapedIdentifier, escapedPath, x, y, w, h);
     fflush(ueberzug_in);
 
     ueberzug_showing = 1;
@@ -291,7 +284,6 @@ static void ueberzugpp_add(const char *img_path) {
         ueberzug_last_w = iw;
         ueberzug_last_h = ih;
     } else {
-        /* Unknown size: force clear next time */
         ueberzug_last_w = 0;
         ueberzug_last_h = 0;
     }
