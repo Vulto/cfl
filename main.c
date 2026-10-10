@@ -30,6 +30,12 @@ int main(int argc, char* argv[]) {
         maxy = LINES - 2 * UI_MARGIN - 2;
 
         initWindows();
+        if (!current_win || !preview_win || !status_win) {
+            endwin();
+            fprintf(stderr, "Terminal too small to display CFL (minimum 24x8).\n");
+            WrappeUp();
+            return EXIT_FAILURE;
+        }
         wclear(current_win);
 
         int t = 0;
