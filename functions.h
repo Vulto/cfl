@@ -1310,13 +1310,13 @@ void trashFiles(void) {
 	while ((readResult = CflReadLine(f, buf, sizeof buf)) > 0) {
 		CflDecodePath(buf);
         int trashResult = trash_one(buf);
-        if (trashResult >= 0) {
+        if (trashResult == 0) {
             printf("Trashed: %s\n", buf);
             ok++;
-            if (trashResult > 0) {
-                fprintf(stderr, "Source could not be fully removed; retained a recoverable trash copy: %s\n", buf);
-                fail++;
-            }
+        } else if (trashResult > 0) {
+            fprintf(stderr, "Trash copy retained, but source removal failed: %s\n", buf);
+            ok++;
+            fail++;
         } else {
             perror(buf);
             fail++;
