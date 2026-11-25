@@ -71,8 +71,11 @@ Omit list is configurable in `config.h` (`JUMP_OMIT_DIRS`, e.g. `.pki`, `usr`, `
 - Videos: resolution, proportion, FPS, codec, duration, size
 
 ### Image previews
-- Überzugpp layer in the preview pane
-- **Smart clear**: when browsing images, only clear the previous layer if the new image is **smaller** or dimensions are unknown; equal/larger images splash without a full clear (faster scrolling)
+- One long-lived Überzugpp process. While keys are repeating, cfl moves the cursor and does not send a decode per file; the preview is drawn about 50 ms after the last key (`PREVIEW_IDLE_MS` in `config.h`)
+- Directory listings are cached until the directory changes. File-vs-directory is taken from `d_type` (one `stat` only when the type is unknown) instead of stating every name on every comparison
+- libmagic is loaded once. Recognized image headers skip MIME detection
+- Large images are downscaled in the background into `$XDG_CACHE_HOME/cfl/thumbs` (or `~/.cache/cfl/thumbs`) with `ffmpeg` or ImageMagick when that tool is installed. The next visit of that file sends the thumbnail. `CFL_NO_THUMB=1` disables it
+- **Smart clear**: when browsing images, only clear the previous layer if the new image is **smaller** or dimensions are unknown; equal/larger images splash without a full clear
 
 ### FreeDesktop Trash
 - **`d`** then **`g`** — trash selection (not a raw dump folder)
@@ -135,6 +138,7 @@ Edit **`config.h`** then recompile:
 | `$XDG_CONFIG_HOME/cfl/lastdir` | Last dir on quit (for `cfl.sh`) |
 | `$XDG_CONFIG_HOME/cfl/scripts` | External scripts |
 | `$XDG_DATA_HOME/Trash` | FreeDesktop trash |
+| `$XDG_CACHE_HOME/cfl/thumbs` | Downscaled image previews (or `~/.cache/cfl/thumbs`) |
 
 If `$XDG_CONFIG_HOME` is unset, `$HOME/.config` is used. If `$XDG_DATA_HOME` is unset, `$HOME/.local/share` is used.
 

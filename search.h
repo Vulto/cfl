@@ -305,26 +305,21 @@ static void search_draw_preview(char **files, search_filt *filt, int sel,
         return;
     }
 
-    /* Directory → list contents; file → text/hex/image preview */
+    /* Directory → list contents; file → text/hex/image preview.
+     * The snapshot is owned by the preview cache (do not free it). */
     if (isRegularFile(path) == 0) {
+        int filled = listing_cached(&cache_preview, path);
         ueberzugpp_remove();
-        int filled = getFiles(path, preview_listing);
         if (filled < 0) {
-            *preview_n = 0;
             wmove(preview_win, 1, 2);
             wprintw(preview_win, "Cannot open directory");
             wrefresh(preview_win);
             return;
         }
-        *preview_n = filled;
         len_preview = filled;
         if (filled > 0) {
-            char saved_sort[PATH_MAX];
-            snprintf(saved_sort, sizeof saved_sort, "%s", sort_dir);
-            if (snprintf(sort_dir, sizeof sort_dir, "%s", path) < (int)sizeof sort_dir)
-                qsort(*preview_listing, (size_t)filled, sizeof(char *), compare);
-            snprintf(sort_dir, sizeof sort_dir, "%s", saved_sort);
-            PreviewNextDir(path, *preview_listing);
+            PreviewNextDir(path, cache_preview.list.names,
+                           cache_preview.list.not_reg, cache_preview.list.is_link);
         } else {
             wmove(preview_win, 1, 2);
             wprintw(preview_win, "Empty directory");

@@ -94,60 +94,235 @@ void moveFiles(char *present_dir);
 void copyFiles(char *present_dir);
 void trashFiles(void);
 
+/* One directory snapshot. not_reg matches the old compare() rule
+ * (isRegularFile(path) == 0): real directories, symlinks to directories,
+ * and anything stat() does not call a regular file sort first. */
+struct cfl_listing {
+	char **names;
+	unsigned char *not_reg;
+	unsigned char *is_link;
+	int n;
+};
+
+struct cfl_list_cache {
+	int valid;
+	char dir[PATH_MAX];
+	int hidden;
+	dev_t dev;
+	ino_t ino;
+	struct timespec mtim;
+	struct cfl_listing list;
+};
+
+static struct cfl_list_cache cache_cwd;
+static struct cfl_list_cache cache_preview;
+static int listing_cached(struct cfl_list_cache *cache, const char *directory);
+
 #include "search.h"
 #include "delete_search.h"
 #include "jump_to.h"
 
-int getFiles(char* directory, char*** target) {
-	int i = 0;
-	int capacity = 16;
-	DIR *pDir;
-	struct dirent *pDirent;
-	char **result;
+struct cfl_ent {
+	char *name;
+	unsigned char not_reg;
+	unsigned char is_link;
+};
 
-	pDir = opendir (directory);
-	if (pDir == NULL) {
-		return -1;
+static void listing_free(struct cfl_listing *listing) {
+	int i;
+	if (!listing)
+		return;
+	if (listing->names) {
+		for (i = 0; i < listing->n; i++)
+			free(listing->names[i]);
+		free(listing->names);
 	}
-
-	result = malloc((size_t)capacity * sizeof(char *));
-	if(result == NULL) {
-		closedir(pDir);
-		displayAlert("Couldn't allocate memory!");
-		exit(1);
-	}
-
-	while ((pDirent = readdir(pDir)) != NULL) {
-		if( strcmp(pDirent->d_name,".") != 0 &&
-				strcmp(pDirent->d_name,"..") != 0 ) {
-			if( pDirent->d_name[0] == '.' )
-				if( hiddenFlag == 0 )
-					continue;
-			if(i >= capacity) {
-				capacity *= 2;
-				char **grown = realloc(result, (size_t)capacity * sizeof(char *));
-				if(grown == NULL) {
-					closedir(pDir);
-					displayAlert("Couldn't allocate memory!");
-					exit(1);
-				}
-				result = grown;
-			}
-
-			result[i] = strdup(pDirent->d_name);
-			if(result[i++] == NULL) {
-				closedir(pDir);
-				displayAlert("Couldn't allocate memory!");
-				exit(1);
-			}
-		}
-	}
-
-	closedir (pDir);
-	*target = result;
-	return i;
+	free(listing->not_reg);
+	free(listing->is_link);
+	memset(listing, 0, sizeof *listing);
 }
 
+static int cfl_ent_cmp(const void *a, const void *b) {
+	const struct cfl_ent *ea = a;
+	const struct cfl_ent *eb = b;
+	if (ea->not_reg != eb->not_reg)
+		return (int)eb->not_reg - (int)ea->not_reg;
+	return strcasecmp(ea->name, eb->name);
+}
+
+/* d_type when the filesystem provides it; otherwise one stat(), same answer
+ * compare() used to recompute on every qsort comparison. */
+static void classify_entry(const char *directory, const char *name, unsigned char d_type,
+                           unsigned char *not_reg, unsigned char *is_link) {
+	char path[PATH_MAX];
+	struct stat st;
+
+	*not_reg = 1;
+	*is_link = (d_type == DT_LNK);
+	if (build_path(path, sizeof path, directory, name) != 0)
+		return;
+	if (d_type == DT_REG) {
+		*not_reg = 0;
+		return;
+	}
+	if (d_type == DT_DIR)
+		return;
+	if (d_type != DT_UNKNOWN && d_type != DT_LNK)
+		return;
+
+	if (stat(path, &st) == 0 && S_ISREG(st.st_mode))
+		*not_reg = 0;
+	if (d_type == DT_UNKNOWN) {
+		struct stat lst;
+		if (lstat(path, &lst) == 0 && S_ISLNK(lst.st_mode))
+			*is_link = 1;
+	}
+}
+
+static void listing_oom(DIR *pDir) {
+	if (pDir)
+		closedir(pDir);
+	displayAlert("Couldn't allocate memory!");
+	exit(1);
+}
+
+/* Scan + sort. Caller owns *out. Returns 0, or -1 if directory cannot be opened. */
+static int listing_scan(const char *directory, struct cfl_listing *out) {
+	DIR *pDir;
+	struct dirent *ent;
+	struct cfl_ent *ents = NULL;
+	int n = 0;
+	int cap = 16;
+	int i;
+
+	memset(out, 0, sizeof *out);
+	pDir = opendir(directory);
+	if (pDir == NULL)
+		return -1;
+
+	ents = malloc((size_t)cap * sizeof *ents);
+	if (ents == NULL)
+		listing_oom(pDir);
+
+	while ((ent = readdir(pDir)) != NULL) {
+		struct cfl_ent *grown;
+		if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+			continue;
+		if (ent->d_name[0] == '.' && hiddenFlag == 0)
+			continue;
+		if (n >= cap) {
+			cap *= 2;
+			grown = realloc(ents, (size_t)cap * sizeof *ents);
+			if (grown == NULL) {
+				for (i = 0; i < n; i++)
+					free(ents[i].name);
+				free(ents);
+				listing_oom(pDir);
+			}
+			ents = grown;
+		}
+		ents[n].name = strdup(ent->d_name);
+		if (ents[n].name == NULL) {
+			for (i = 0; i < n; i++)
+				free(ents[i].name);
+			free(ents);
+			listing_oom(pDir);
+		}
+		classify_entry(directory, ents[n].name, ent->d_type, &ents[n].not_reg, &ents[n].is_link);
+		n++;
+	}
+	closedir(pDir);
+
+	if (n > 1)
+		qsort(ents, (size_t)n, sizeof *ents, cfl_ent_cmp);
+
+	out->n = n;
+	if (n == 0) {
+		free(ents);
+		return 0;
+	}
+	out->names = malloc((size_t)n * sizeof(char *));
+	out->not_reg = malloc((size_t)n);
+	out->is_link = malloc((size_t)n);
+	if (out->names == NULL || out->not_reg == NULL || out->is_link == NULL) {
+		for (i = 0; i < n; i++)
+			free(ents[i].name);
+		free(ents);
+		listing_free(out);
+		listing_oom(NULL);
+	}
+	for (i = 0; i < n; i++) {
+		out->names[i] = ents[i].name;
+		out->not_reg[i] = ents[i].not_reg;
+		out->is_link[i] = ents[i].is_link;
+	}
+	free(ents);
+	return 0;
+}
+
+/* Reuse a sorted snapshot until the directory's identity or mtime changes. */
+static int listing_cached(struct cfl_list_cache *cache, const char *directory) {
+	struct stat before, after;
+	struct cfl_listing fresh;
+	int changed;
+
+	if (stat(directory, &before) != 0 || !S_ISDIR(before.st_mode))
+		return -1;
+	if (cache->valid && cache->hidden == hiddenFlag && cache->dev == before.st_dev &&
+	    cache->ino == before.st_ino &&
+	    cache->mtim.tv_sec == before.st_mtim.tv_sec &&
+	    cache->mtim.tv_nsec == before.st_mtim.tv_nsec &&
+	    strcmp(cache->dir, directory) == 0)
+		return cache->list.n;
+
+	if (listing_scan(directory, &fresh) != 0)
+		return -1;
+	changed = 0;
+	if (stat(directory, &after) != 0)
+		changed = 1;
+	else if (after.st_mtim.tv_sec != before.st_mtim.tv_sec ||
+	         after.st_mtim.tv_nsec != before.st_mtim.tv_nsec)
+		changed = 1;
+
+	listing_free(&cache->list);
+	cache->list = fresh;
+	snprintf(cache->dir, sizeof cache->dir, "%s", directory);
+	cache->hidden = hiddenFlag;
+	cache->dev = before.st_dev;
+	cache->ino = before.st_ino;
+	cache->mtim = before.st_mtim;
+	cache->valid = changed ? 0 : 1;
+	return cache->list.n;
+}
+
+static void listing_cache_invalidate(void) {
+	listing_free(&cache_cwd.list);
+	listing_free(&cache_preview.list);
+	cache_cwd.valid = 0;
+	cache_preview.valid = 0;
+	cache_cwd.dir[0] = '\0';
+	cache_preview.dir[0] = '\0';
+}
+
+int getFiles(char* directory, char*** target) {
+	struct cfl_listing listing;
+	if (listing_scan(directory, &listing) != 0)
+		return -1;
+	if (listing.names == NULL) {
+		listing.names = malloc(sizeof(char *));
+		if (listing.names == NULL) {
+			displayAlert("Couldn't allocate memory!");
+			exit(1);
+		}
+	}
+	*target = listing.names;
+	free(listing.not_reg);
+	free(listing.is_link);
+	return listing.n;
+}
+
+/* Kept for callers that still qsort names. The file list uses cfl_ent_cmp
+ * on kinds captured once per directory change. */
 int compare (const void * a, const void * b ) {
 	char temp_filepath1[PATH_MAX];
 	char temp_filepath2[PATH_MAX];
@@ -212,25 +387,55 @@ void handleFlags(char** directories) {
 
 // Moving this function to ui.h requires further refactoring
 void initWindows(void) {
+	static int win_lines = -1, win_cols = -1;
 	int content_left, panel_top, panel_height, sep_col;
+	int margin, content_w, left_w, right_w;
+	int same;
+
+	sigprocmask(SIG_UNBLOCK, &x, NULL);
+
+	/* endwin() (shell, pager) leaves the old WINDOW objects detached. */
+	if (isendwin()) {
+		if (status_win) delwin(status_win);
+		if (current_win) delwin(current_win);
+		if (preview_win) delwin(preview_win);
+		status_win = current_win = preview_win = NULL;
+		win_lines = -1;
+		win_cols = -1;
+		refresh();
+	}
+
 	ui_get_layout(&content_left, &panel_top, &panel_height, &sep_col);
 
-	int margin = UI_MARGIN;
-	int content_w = COLS - 2 * margin;
-	int left_w  = (content_w * 2) / 5 + 2;
-	int right_w = content_w - left_w - 1;
-
-	status_win = newwin(2, content_w, margin, content_left);
+	margin = UI_MARGIN;
+	content_w = COLS - 2 * margin;
+	left_w  = (content_w * 2) / 5 + 2;
+	right_w = content_w - left_w - 1;
 
 	starty = panel_top;
 	preview_start = sep_col;
 
+	/* newwin() every key leaked a full set of windows and got slower as
+	 * the ncurses window list grew. Reuse them until the terminal size changes.
+	 * handleResize() deletes and nulls the windows before calling us. */
+	same = current_win && preview_win && status_win &&
+	       win_lines == LINES && win_cols == COLS;
+	if (same) {
+		ui_clear_gaps();
+		return;
+	}
+
+	if (status_win) delwin(status_win);
+	if (current_win) delwin(current_win);
+	if (preview_win) delwin(preview_win);
+
+	status_win = newwin(2, content_w, margin, content_left);
 	current_win = newwin(panel_height, left_w,  starty, content_left);
 	preview_win = newwin(panel_height, right_w, starty, sep_col + 1);
+	win_lines = LINES;
+	win_cols = COLS;
 
 	keypad(current_win, TRUE);
-	sigprocmask(SIG_UNBLOCK, &x, NULL);
-
 	ui_clear_gaps();
 }
 
@@ -1453,8 +1658,7 @@ void WrappeUp(void) {
 	free(editor);
 	free(shell);
 	free(last);
-    ueberzugpp_remove();
-	ueberzugpp_stop();
+    preview_shutdown();
 	endwin();
 }
 

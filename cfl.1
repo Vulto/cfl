@@ -150,7 +150,10 @@ Page up / page down in the preview pane.
 .TP
 Image previews (Überzugpp) only clear the previous image when the next
 image is smaller or not an image; equal or larger images are drawn without
-a full clear for faster browsing.
+a full clear for faster browsing. Held navigation does not start a decode
+per file; the preview is drawn shortly after the last key. Large images are
+cached, downscaled, under $XDG_CACHE_HOME/cfl/thumbs when ffmpeg or
+ImageMagick is available.
 
 .SS Other
 .TP

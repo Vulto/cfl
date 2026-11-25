@@ -19,6 +19,25 @@
 #define MAX_PREVIEW_BYTES (50 * 1024 * 1024) // 50 MB
 #endif
 
+/* Quiet time before a preview is drawn. Long enough to cover terminal key
+ * repeat (held j/k), short enough that a single tap still feels immediate.
+ * 0 draws the preview before waiting for the next key. */
+#ifndef PREVIEW_IDLE_MS
+#define PREVIEW_IDLE_MS 50
+#endif
+
+/* Large images are downscaled into $XDG_CACHE_HOME/cfl/thumbs (ffmpeg or
+ * ImageMagick, when present) so the next visit does not decode the original. */
+#ifndef THUMB_MIN_BYTES
+#define THUMB_MIN_BYTES (256 * 1024)
+#endif
+#ifndef THUMB_MIN_PIXELS
+#define THUMB_MIN_PIXELS (2000 * 1000)
+#endif
+#ifndef THUMB_EDGE
+#define THUMB_EDGE 480
+#endif
+
 #ifndef TEXT_PREVIEW_LINES
 #define TEXT_PREVIEW_LINES 60
 #endif
