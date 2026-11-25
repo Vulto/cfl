@@ -83,6 +83,12 @@
 // Go to the bottom of the current view
 #define KEY_BOTTOM 'B'
 
+/* Four in-process tabs (nnn contexts). 1–4 were unbound. */
+#define KEY_TAB1 '1'
+#define KEY_TAB2 '2'
+#define KEY_TAB3 '3'
+#define KEY_TAB4 '4'
+
 // Add files to selection list
 #define KEY_SEL 'v'
 

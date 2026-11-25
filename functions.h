@@ -93,6 +93,7 @@ int getWritePermissions(char *path);
 void moveFiles(char *present_dir);
 void copyFiles(char *present_dir);
 void trashFiles(void);
+void tab_boot(void);
 
 /* One directory snapshot. not_reg matches the old compare() rule
  * (isRegularFile(path) == 0): real directories, symlinks to directories,
@@ -622,6 +623,140 @@ void init(int argc, char* argv[]) {
 	}
 	/* Selection starts empty each session; never restore a previous list */
 	selectedFiles = 0;
+	tab_boot();
+}
+
+/* In-process tabs (nnn contexts). Each one keeps its own directory, cursor,
+ * list scroll, hidden-files flag, file-info mode, and preview scroll.
+ * The selection clipboard stays global so copy/paste works across tabs. */
+int cfl_cur_tab = 0;
+int cfl_tab_active[CFL_TABS] = {1, 0, 0, 0};
+
+struct cfl_tab {
+	char dir[PATH_MAX];
+	char selected_name[NAME_MAX];
+	int selection;
+	int start;
+	int hidden;
+	int file_info;
+	int preview_scroll;
+};
+
+static struct cfl_tab cfl_tabs[CFL_TABS];
+static int tab_need_reseek = 0;
+static int tab_need_scroll = 0;
+
+static void tab_capture(struct cfl_tab *t) {
+	snprintf(t->dir, sizeof t->dir, "%s", dir);
+	snprintf(t->selected_name, sizeof t->selected_name, "%s", selected_file);
+	t->selection = selection;
+	t->start = start;
+	t->hidden = hiddenFlag;
+	t->file_info = fileInfoMode;
+	t->preview_scroll = preview_scroll;
+}
+
+static void tab_apply(const struct cfl_tab *t) {
+	snprintf(dir, sizeof dir, "%s", t->dir);
+	snprintf(selected_file, sizeof selected_file, "%s", t->selected_name);
+	selection = t->selection;
+	start = t->start;
+	hiddenFlag = t->hidden;
+	fileInfoMode = t->file_info;
+	preview_scroll = t->preview_scroll;
+}
+
+void tab_boot(void) {
+	memset(cfl_tabs, 0, sizeof cfl_tabs);
+	cfl_cur_tab = 0;
+	cfl_tab_active[0] = 1;
+	cfl_tab_active[1] = cfl_tab_active[2] = cfl_tab_active[3] = 0;
+	tab_capture(&cfl_tabs[0]);
+	cfl_tabs[0].selected_name[0] = '\0';
+}
+
+/* 0-based. Unused tabs open on the directory of the tab you left.
+ * Returns 1 when the visible context changed. */
+int switch_tab(int n) {
+	struct cfl_tab *dst;
+
+	if (n < 0 || n >= CFL_TABS || n == cfl_cur_tab)
+		return 0;
+
+	tab_capture(&cfl_tabs[cfl_cur_tab]);
+	cfl_tab_active[cfl_cur_tab] = 1;
+
+	dst = &cfl_tabs[n];
+	if (!cfl_tab_active[n]) {
+		tab_capture(dst);
+		dst->selection = 0;
+		dst->start = 0;
+		dst->preview_scroll = 0;
+		dst->selected_name[0] = '\0';
+		cfl_tab_active[n] = 1;
+		tab_need_reseek = 0;
+	} else {
+		tab_need_reseek = 1;
+	}
+	tab_need_scroll = 1;
+
+	tab_apply(dst);
+	cfl_cur_tab = n;
+	/* Drop the other tab's image and any text still drawn in the preview. */
+	if (preview_win) {
+		wclear(preview_win);
+		wrefresh(preview_win);
+	}
+	ueberzugpp_remove();
+	return 1;
+}
+
+/* After a tab restore, land on the file that was current there. */
+void tab_reseek_if_needed(char **names, int n) {
+	const char *want;
+	int i;
+
+	if (!tab_need_reseek)
+		return;
+	tab_need_reseek = 0;
+	if (!names || n <= 0)
+		return;
+	want = cfl_tabs[cfl_cur_tab].selected_name;
+	if (!want[0] || strcmp(want, "Empty") == 0)
+		return;
+	for (i = 0; i < n; i++) {
+		if (names[i] && strcmp(names[i], want) == 0) {
+			selection = i;
+			return;
+		}
+	}
+}
+
+/* Keep the restored cursor inside the list window. */
+void tab_fix_scroll(void) {
+	int visible;
+
+	if (!tab_need_scroll)
+		return;
+	tab_need_scroll = 0;
+	if (len <= 0) {
+		start = 0;
+		selection = 0;
+		return;
+	}
+	if (selection < 0)
+		selection = 0;
+	if (selection >= len)
+		selection = len - 1;
+	visible = (maxy > 1) ? (maxy - 1) : 1;
+	if (start < 0)
+		start = 0;
+	if (start > selection)
+		start = selection;
+	if (selection >= start + visible)
+		start = selection - visible + 1;
+	if (start < 0)
+		start = 0;
 }
 
 int fileExists(char *file) {
@@ -1585,6 +1720,7 @@ void help(WINDOW *main_win) {
     mvwprintw(help_win, line++, 2, " j       Next item");
     mvwprintw(help_win, line++, 2, " k       Previous item");
     mvwprintw(help_win, line++, 2, " l       Open file or Enter dir");
+    mvwprintw(help_win, line++, 2, " 1-4     Switch tab (new tab opens here)");
     mvwprintw(help_win, line++, 2, " v       Toggle select current item");
     mvwprintw(help_win, line++, 2, " V       Select all files in directory");
     mvwprintw(help_win, line++, 2, " m       Move selection to current directory");

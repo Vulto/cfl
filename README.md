@@ -70,6 +70,9 @@ Omit list is configurable in `config.h` (`JUMP_OMIT_DIRS`, e.g. `.pki`, `usr`, `
 - Images: resolution and proportion (via mediainfo when available)
 - Videos: resolution, proportion, FPS, codec, duration, size
 
+### Tabs
+Four in-process tabs, in the same spirit as nnn's contexts (not separate processes). Each tab remembers its directory, cursor, list scroll, hidden-files toggle, and whether file-info mode is on. The selection clipboard is shared, so you can mark files in one tab and paste them in another. Switching tabs clears the Überzug image and draws the new tab's preview.
+
 ### Image previews
 - One long-lived Überzugpp process. While keys are repeating, cfl moves the cursor and does not send a decode per file; the preview is drawn about 50 ms after the last key (`PREVIEW_IDLE_MS` in `config.h`)
 - Directory listings are cached until the directory changes. File-vs-directory is taken from `d_type` (one `stat` only when the type is unknown) instead of stating every name on every comparison
@@ -99,6 +102,7 @@ Then run `cfl` and press **`q`**: the shell function `cd`s to the last browsed p
 | Key | Action |
 |:---:|--------|
 | `h` `j` `k` `l` | Parent / down / up / open |
+| `1` `2` `3` `4` | Switch tab. A new tab opens in the current directory and keeps its own cursor, scroll, and hidden-files state. The status line shows the four tabs (reverse = current, underline = open). |
 | `g` `G` `T` `M` `B` | Start / end / top / mid / bottom of list |
 | `/` | Fuzzy search |
 | `J` | Jump to… |

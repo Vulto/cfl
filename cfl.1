@@ -30,6 +30,14 @@ Directory to open on startup. If omitted, the current working directory is used.
 
 .SS Navigation
 .TP
+\fB1\fR / \fB2\fR / \fB3\fR / \fB4\fR
+Switch tab. There are four tabs, kept in-process (nnn contexts): each has its
+own directory, cursor, scroll position, and hidden-files state. A tab that
+has not been used yet opens at the current directory. The status line shows
+the four numbers; the current tab is reversed and tabs that have been opened
+are underlined. The selection clipboard is shared across tabs. Switching
+clears the Überzug image and redraws the preview for the tab you landed on.
+.TP
 \fBh\fR
 Parent directory.
 .TP

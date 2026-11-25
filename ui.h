@@ -20,6 +20,11 @@ int start = 0;
 /* When set, right pane shows file info instead of previews/images */
 int fileInfoMode = 0;
 
+/* Four tabs, nnn-style contexts. Index 0 is tab 1. */
+#define CFL_TABS 4
+extern int cfl_cur_tab;
+extern int cfl_tab_active[CFL_TABS];
+
 // Scrollbar helper (reusable for file list right + preview right for symmetry). Implemented later in this file.
 void drawScrollbar(WINDOW *win, int total, int first_visible, bool on_left);
 void drawFileListScrollbar(void);
@@ -216,6 +221,18 @@ void displayAlert(char *message) {
 void displayStatus(void) {
 	wclear(status_win);
 	wmove(status_win,0,1);
+	/* nnn contexts: plain = unused, underline = open, reverse = current */
+	for (int t = 0; t < CFL_TABS; t++) {
+		int attr = A_DIM;
+		if (t == cfl_cur_tab)
+			attr = A_REVERSE | A_BOLD;
+		else if (cfl_tab_active[t])
+			attr = A_UNDERLINE | A_BOLD;
+		wattrset(status_win, attr);
+		wprintw(status_win, "%d", t + 1);
+		wattrset(status_win, A_NORMAL);
+		waddch(status_win, ' ');
+	}
 	if(SHOW_SELECTION_COUNT == 1) {
 		wprintw(status_win,"[%d] ", selectedFiles);
 	}

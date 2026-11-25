@@ -46,12 +46,18 @@ int main(int argc, char* argv[]) {
         if(selection > len-1) {
             selection = len-1;
         }
+        tab_reseek_if_needed(directories, len);
+        if (selection > len - 1)
+            selection = len - 1;
+        if (selection < 0)
+            selection = 0;
 
         handleFlags(directories);
 
         getmaxyx(stdscr, maxy, maxx);
         /* Respect 1-line top + bottom margin + status bar */
         maxy = LINES - 2 * UI_MARGIN - 2;
+        tab_fix_scroll();
 
         initWindows();
         wclear(current_win);
@@ -234,6 +240,10 @@ int main(int argc, char* argv[]) {
             case KEY_TOP: selection = start; break;
             case KEY_BOTTOM: goBOTTOM(); break;
             case KEY_MID: goMID(); break;
+            case KEY_TAB1: switch_tab(0); break;
+            case KEY_TAB2: switch_tab(1); break;
+            case KEY_TAB3: switch_tab(2); break;
+            case KEY_TAB4: switch_tab(3); break;
             case KEY_SHELL:
                 ueberzugpp_remove(); endwin(); goShell(pid); start = 0; selection = 0; refresh(); break;
             case KEY_RENAME:
@@ -289,9 +299,12 @@ int main(int argc, char* argv[]) {
             case KEY_UPDATE: listing_cache_invalidate(); break;
         }
 
-        /* Held navigation skips previews; anything else redraws on the next frame. */
+        /* Held navigation skips previews; anything else redraws on the next frame.
+         * A tab switch already cleared the image; draw the new one immediately. */
         want_preview = 1;
         debounce_preview = (selection != sel0 || hiddenFlag != hidden0 || strcmp(dir, dir0) != 0);
+        if (ch == KEY_TAB1 || ch == KEY_TAB2 || ch == KEY_TAB3 || ch == KEY_TAB4)
+            debounce_preview = 0;
     }
 
     WrappeUp();
