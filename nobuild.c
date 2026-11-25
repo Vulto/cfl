@@ -19,11 +19,14 @@
                 "-Wunused-variable",        \
                 "-std=c23",                 \
                 "-O0",                      \
-                "-D_POSIX_C_SOURCE=200809L"
+                "-D_POSIX_C_SOURCE=200809L", \
+                "-D_DEFAULT_SOURCE",        \
+                "-D_XOPEN_SOURCE=600",      \
+                "-I/usr/include/ncursesw"
 
 #define OLD "c.old"
 
-#define LIBS "-lncursesw", "-lmagic"
+#define LIBS "-lncursesw", "-ltinfow", "-lmagic"
 
 char *cc(void) {
     char *result = getenv("CC");

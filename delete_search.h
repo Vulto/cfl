@@ -342,7 +342,7 @@ static int delete_confirm_dialog(char **files, int n, const int *targets, int nt
             int t = top + i;
             if (t >= ntargets) break;
             int oidx = targets[t];
-            char line[PATH_MAX + 16];
+            char line[PATH_MAX + 32]; /* "N. [t] " prefix + PATH_MAX path + NUL */
             const char *shown = "?";
             char path[PATH_MAX];
             char typec = '?';

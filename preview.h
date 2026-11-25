@@ -390,8 +390,7 @@ static void render_text_preview(const char *path, int maxx) {
 /* Small helper for preview visible height (used by clamping) */
 static inline int get_preview_visible_rows(void) {
 	if (!preview_win) return 20;
-	int r, c;
-	getmaxyx(preview_win, r, c);
+	int r = getmaxy(preview_win);
 	return (r > 0) ? r : 1;
 }
 
@@ -585,8 +584,7 @@ void PreviewNextDir(char *next_dir_arg, char **next_directories) {
     /* Directory listing is not an image — clear ueberzug if still up */
     ueberzugpp_remove();
 
-    int rows, cols;
-    getmaxyx(preview_win, rows, cols);
+    int rows = getmaxy(preview_win);
     int visible = rows > 0 ? rows : 1;
     wclear(preview_win);
 

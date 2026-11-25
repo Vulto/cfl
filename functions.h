@@ -1,4 +1,6 @@
-/* Wide-char ncurses (wget_wch) must be enabled before <ncurses.h> */
+/* Search/jump/delete-search read Unicode queries via wget_wch + wchar_t
+ * (KEY_CODE_YES, iswprint, search_wc_to_mb). Enable wide ncurses before the
+ * header; prefer ncursesw/ so we do not pick up the narrow curses.h. */
 #ifndef NCURSES_WIDECHAR
 #define NCURSES_WIDECHAR 1
 #endif
@@ -13,7 +15,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#if defined(__has_include) && __has_include(<ncursesw/ncurses.h>)
+#include <ncursesw/ncurses.h>
+#else
 #include <ncurses.h>
+#endif
 #include <wchar.h>
 #include <wctype.h>
 #include <pwd.h>
@@ -146,11 +152,12 @@ int compare (const void * a, const void * b ) {
 	char temp_filepath1[PATH_MAX];
 	char temp_filepath2[PATH_MAX];
 
-	snprintf(temp_filepath1, sizeof(temp_filepath1), "%s/%s", sort_dir, *(char **)a);
-	snprintf(temp_filepath2, sizeof(temp_filepath2), "%s/%s", sort_dir, *(char **)b);
-
-	int is_dir1 = (isRegularFile(temp_filepath1) == 0);
-	int is_dir2 = (isRegularFile(temp_filepath2) == 0);
+	int is_dir1 = 0;
+	int is_dir2 = 0;
+	if (build_path(temp_filepath1, sizeof temp_filepath1, sort_dir, *(char **)a) == 0)
+		is_dir1 = (isRegularFile(temp_filepath1) == 0);
+	if (build_path(temp_filepath2, sizeof temp_filepath2, sort_dir, *(char **)b) == 0)
+		is_dir2 = (isRegularFile(temp_filepath2) == 0);
 
 	if (is_dir1 != is_dir2) {
 		return is_dir2 - is_dir1;
@@ -275,12 +282,11 @@ void init(int argc, char* argv[]) {
 	info = getpwuid(uid);
 
 	if( getenv("SHELL") == NULL) {
-		shell = malloc(10);
+		shell = strdup("/bin/bash");
 		if(shell == NULL) {
 			printf("%s\n", "Couldn't initialize shell");
 			exit(1);
 		}
-		snprintf(shell, 10, "%s", "/bin/bash");
 	} else {
 		allocSize = snprintf(NULL, 0, "%s", getenv("SHELL"));
 		shell = malloc(allocSize + 1);
@@ -292,12 +298,11 @@ void init(int argc, char* argv[]) {
 	}
 
 	if( getenv("EDITOR") == NULL) {
-		editor = malloc(4);
+		editor = strdup("nvim");
 		if(editor == NULL) {
 			printf("%s\n", "Couldn't initialize editor");
 			exit(1);
 		}
-		snprintf(editor, 4, "%s", "nvim");
 	} else {
 		allocSize = snprintf(NULL, 0, "%s", getenv("EDITOR"));
 		editor = malloc(allocSize + 1);
@@ -400,7 +405,10 @@ void init(int argc, char* argv[]) {
 			snprintf(dir, sizeof(dir), "%s", arg);
 		} else {
 			char temp[PATH_MAX];
-			snprintf(temp, sizeof(temp), "%s/%s", dir, arg);
+			if (build_path(temp, sizeof temp, dir, arg) != 0) {
+				printf("Path too long\n");
+				exit(1);
+			}
 			snprintf(dir, sizeof(dir), "%s", temp);
 		}
 	} else if(argc > 2) {
@@ -617,7 +625,10 @@ void removeFiles(void){
 
 void renameFiles(char **directories){
 	if( access( clipboard_path, F_OK ) == -1 ){
-		snprintf(temp_dir, sizeof(temp_dir), "%s/%s", dir, directories[selection]);
+		if (build_path(temp_dir, sizeof temp_dir, dir, directories[selection]) != 0) {
+			displayAlert("Path too long");
+			return;
+		}
 		char *temp = strdup(temp_dir);
 		if(temp == NULL){
 			endwin();
@@ -723,7 +734,10 @@ void moveFiles(char *present_dir) {
 		// Construct the destination path
 		const char *base = strrchr(buf, '/');
 		base = base ? base + 1 : buf;
-		snprintf(dest_path, PATH_MAX, "%s/%s", present_dir, base);
+		if (build_path(dest_path, sizeof dest_path, present_dir, base) != 0) {
+			fprintf(stderr, "Path too long: %s\n", buf);
+			continue;
+		}
 
 		// Move the file
 		if (rename(buf, dest_path) != 0) {
@@ -1318,7 +1332,10 @@ void CreateDir() {
 	}
 
 	char fullPath[PATH_MAX];
-	snprintf(fullPath, sizeof(fullPath), "%s/%s", dir, dirName);
+	if (build_path(fullPath, sizeof fullPath, dir, dirName) != 0) {
+		displayAlert("Path too long");
+		return;
+	}
 	if (mkdir(fullPath, 0755) == 0) {
 		displayAlert("Directory created");
 	} else {
