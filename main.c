@@ -14,6 +14,66 @@ int main(int argc, char* argv[]) {
                    (unsigned)cache_cwd.list.is_link[k], cache_cwd.list.names[k]);
         return 0;
     }
+    if (getenv("CFL_TIME_LIST") != NULL) {
+        struct timespec a, b;
+        double ms;
+        int n;
+        long rss_kb = -1;
+        FILE *st;
+        clock_gettime(CLOCK_MONOTONIC, &a);
+        n = listing_cached(&cache_cwd, dir);
+        clock_gettime(CLOCK_MONOTONIC, &b);
+        ms = (b.tv_sec - a.tv_sec) * 1000.0 + (b.tv_nsec - a.tv_nsec) / 1e6;
+        st = fopen("/proc/self/status", "r");
+        if (st) {
+            char line[256];
+            while (fgets(line, sizeof line, st)) {
+                if (sscanf(line, "VmRSS: %ld", &rss_kb) == 1)
+                    break;
+            }
+            fclose(st);
+        }
+        if (n < 0) {
+            fprintf(stderr, "Couldn't open directory\n");
+            return 1;
+        }
+        printf("entries %d open_ms %.1f rss_kb %ld\n", n, ms, rss_kb);
+        clock_gettime(CLOCK_MONOTONIC, &a);
+        listing_cached(&cache_cwd, dir);
+        clock_gettime(CLOCK_MONOTONIC, &b);
+        ms = (b.tv_sec - a.tv_sec) * 1000.0 + (b.tv_nsec - a.tv_nsec) / 1e6;
+        printf("cache_hit_ms %.3f\n", ms);
+        return 0;
+    }
+    if (getenv("CFL_TIME_SELECT") != NULL) {
+        struct timespec a, b;
+        double ms;
+        int n = listing_cached(&cache_cwd, dir);
+        if (n < 0) {
+            fprintf(stderr, "Couldn't open directory\n");
+            return 1;
+        }
+        clock_gettime(CLOCK_MONOTONIC, &a);
+        selectAllFiles(cache_cwd.list.names, n);
+        clock_gettime(CLOCK_MONOTONIC, &b);
+        ms = (b.tv_sec - a.tv_sec) * 1000.0 + (b.tv_nsec - a.tv_nsec) / 1e6;
+        printf("select_all entries %d ms %.1f\n", n, ms);
+        clock_gettime(CLOCK_MONOTONIC, &a);
+        for (int frame = 0; frame < 100; frame++) {
+            int row;
+            int shown = n < 30 ? n : 30;
+            for (row = 0; row < shown; row++) {
+                char path[PATH_MAX];
+                if (build_path(path, sizeof path, dir, cache_cwd.list.names[row]) != 0)
+                    continue;
+                checkClipboard(path);
+            }
+        }
+        clock_gettime(CLOCK_MONOTONIC, &b);
+        ms = (b.tv_sec - a.tv_sec) * 1000.0 + (b.tv_nsec - a.tv_nsec) / 1e6;
+        printf("mark_lookup_100_frames_ms %.1f\n", ms);
+        return 0;
+    }
     cursesInit();
 
     int ch = 0;
@@ -63,6 +123,9 @@ int main(int argc, char* argv[]) {
         wclear(current_win);
 
         int t = 0;
+        int list_w = 0;
+        if (current_win)
+            list_w = getmaxx(current_win);
         for( i = start ; i < len ; i++, t++ ) {
             if( t == maxy -1 ) {
                 break;
@@ -92,9 +155,6 @@ int main(int argc, char* argv[]) {
             wmove(current_win, t, 2);
 
             /* Reserve space for right-edge scrollbar inside current_win */
-            int rows, list_w;
-            getmaxyx(current_win, rows, list_w);
-            (void)rows;
             int trunc = list_w - 5;  /* left pad (2) + right bar reservation + safety */
 
             /* Symlink display: "name → destination" using unicode arrow */

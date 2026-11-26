@@ -98,11 +98,19 @@ void tab_boot(void);
 /* One directory snapshot. not_reg matches the old compare() rule
  * (isRegularFile(path) == 0): real directories, symlinks to directories,
  * and anything stat() does not call a regular file sort first. */
+struct cfl_namechunk {
+	struct cfl_namechunk *next;
+	size_t used;
+	size_t cap;
+	char data[];
+};
+
 struct cfl_listing {
 	char **names;
 	unsigned char *not_reg;
 	unsigned char *is_link;
 	int n;
+	struct cfl_namechunk *names_arena;
 };
 
 struct cfl_list_cache {
@@ -130,17 +138,44 @@ struct cfl_ent {
 };
 
 static void listing_free(struct cfl_listing *listing) {
-	int i;
+	struct cfl_namechunk *chunk;
 	if (!listing)
 		return;
-	if (listing->names) {
-		for (i = 0; i < listing->n; i++)
-			free(listing->names[i]);
-		free(listing->names);
-	}
+	/* names[] point into names_arena; one free per chunk, not per file. */
+	free(listing->names);
 	free(listing->not_reg);
 	free(listing->is_link);
+	chunk = listing->names_arena;
+	while (chunk) {
+		struct cfl_namechunk *next = chunk->next;
+		free(chunk);
+		chunk = next;
+	}
 	memset(listing, 0, sizeof *listing);
+}
+
+/* Copy a filename into a chunk that never moves, so qsort can keep pointers. */
+static char *listing_store_name(struct cfl_namechunk **chunks, const char *s) {
+	size_t len = strlen(s) + 1;
+	struct cfl_namechunk *chunk = *chunks;
+	char *dst;
+
+	if (chunk == NULL || chunk->used + len > chunk->cap) {
+		size_t cap = (size_t)1 << 20;
+		if (len > cap)
+			cap = len;
+		chunk = malloc(sizeof(*chunk) + cap);
+		if (chunk == NULL)
+			return NULL;
+		chunk->next = *chunks;
+		chunk->used = 0;
+		chunk->cap = cap;
+		*chunks = chunk;
+	}
+	dst = chunk->data + chunk->used;
+	memcpy(dst, s, len);
+	chunk->used += len;
+	return dst;
 }
 
 static int cfl_ent_cmp(const void *a, const void *b) {
@@ -159,18 +194,22 @@ static void classify_entry(const char *directory, const char *name, unsigned cha
 	struct stat st;
 
 	*not_reg = 1;
-	*is_link = (d_type == DT_LNK);
-	if (build_path(path, sizeof path, directory, name) != 0)
-		return;
+	*is_link = 0;
+	/* Regular files and directories need no stat and no path build.
+	 * Only symlinks (follow the target) and DT_UNKNOWN hit the disk. */
 	if (d_type == DT_REG) {
 		*not_reg = 0;
 		return;
 	}
 	if (d_type == DT_DIR)
 		return;
-	if (d_type != DT_UNKNOWN && d_type != DT_LNK)
+	if (d_type == DT_LNK)
+		*is_link = 1;
+	else if (d_type != DT_UNKNOWN)
 		return;
 
+	if (build_path(path, sizeof path, directory, name) != 0)
+		return;
 	if (stat(path, &st) == 0 && S_ISREG(st.st_mode))
 		*not_reg = 0;
 	if (d_type == DT_UNKNOWN) {
@@ -201,6 +240,7 @@ static int listing_scan(const char *directory, struct cfl_listing *out) {
 	if (pDir == NULL)
 		return -1;
 
+	cap = 1024;
 	ents = malloc((size_t)cap * sizeof *ents);
 	if (ents == NULL)
 		listing_oom(pDir);
@@ -215,18 +255,16 @@ static int listing_scan(const char *directory, struct cfl_listing *out) {
 			cap *= 2;
 			grown = realloc(ents, (size_t)cap * sizeof *ents);
 			if (grown == NULL) {
-				for (i = 0; i < n; i++)
-					free(ents[i].name);
 				free(ents);
+				listing_free(out);
 				listing_oom(pDir);
 			}
 			ents = grown;
 		}
-		ents[n].name = strdup(ent->d_name);
+		ents[n].name = listing_store_name(&out->names_arena, ent->d_name);
 		if (ents[n].name == NULL) {
-			for (i = 0; i < n; i++)
-				free(ents[i].name);
 			free(ents);
+			listing_free(out);
 			listing_oom(pDir);
 		}
 		classify_entry(directory, ents[n].name, ent->d_type, &ents[n].not_reg, &ents[n].is_link);
@@ -246,8 +284,6 @@ static int listing_scan(const char *directory, struct cfl_listing *out) {
 	out->not_reg = malloc((size_t)n);
 	out->is_link = malloc((size_t)n);
 	if (out->names == NULL || out->not_reg == NULL || out->is_link == NULL) {
-		for (i = 0; i < n; i++)
-			free(ents[i].name);
 		free(ents);
 		listing_free(out);
 		listing_oom(NULL);
@@ -307,19 +343,32 @@ static void listing_cache_invalidate(void) {
 
 int getFiles(char* directory, char*** target) {
 	struct cfl_listing listing;
+	char **owned;
+	int i, n;
+
 	if (listing_scan(directory, &listing) != 0)
 		return -1;
-	if (listing.names == NULL) {
-		listing.names = malloc(sizeof(char *));
-		if (listing.names == NULL) {
+	n = listing.n;
+	owned = malloc((size_t)(n > 0 ? n : 1) * sizeof(char *));
+	if (owned == NULL) {
+		listing_free(&listing);
+		displayAlert("Couldn't allocate memory!");
+		exit(1);
+	}
+	for (i = 0; i < n; i++) {
+		owned[i] = strdup(listing.names[i]);
+		if (owned[i] == NULL) {
+			while (i > 0)
+				free(owned[--i]);
+			free(owned);
+			listing_free(&listing);
 			displayAlert("Couldn't allocate memory!");
 			exit(1);
 		}
 	}
-	*target = listing.names;
-	free(listing.not_reg);
-	free(listing.is_link);
-	return listing.n;
+	listing_free(&listing);
+	*target = owned;
+	return n;
 }
 
 /* Kept for callers that still qsort names. The file list uses cfl_ent_cmp
@@ -776,10 +825,160 @@ char* replace(char* str, char* a, char* b) {
 	return str;
 }
 
-int checkClipboard(char *filepath) {
-	FILE *f = fopen(clipboard_path, "r");
+/* In-memory clipboard so marking and drawing are not O(n) file scans.
+ * Empty slots end a probe. Tombstones keep probes correct after a removal. */
+struct clip_slot {
+	unsigned hash;
+	char *path;
+	unsigned char state; /* 0 empty, 1 used, 2 tomb */
+};
+
+static struct clip_slot *clip_tab = NULL;
+static size_t clip_cap = 0;
+static size_t clip_len = 0;
+static int clip_ready = 0;
+
+static unsigned clip_hash(const char *s) {
+	unsigned h = 2166136261u;
+	for (; *s; s++) {
+		h ^= (unsigned char)*s;
+		h *= 16777619u;
+	}
+	return h ? h : 1u;
+}
+
+static void clip_free_tab(void) {
+	size_t i;
+	if (clip_tab) {
+		for (i = 0; i < clip_cap; i++) {
+			if (clip_tab[i].state == 1)
+				free(clip_tab[i].path);
+		}
+		free(clip_tab);
+	}
+	clip_tab = NULL;
+	clip_cap = 0;
+	clip_len = 0;
+}
+
+static int clip_lookup(const char *path, unsigned h, size_t *slot) {
+	size_t i, mask, first_tomb;
+	int saw_tomb = 0;
+
+	if (clip_cap == 0) {
+		*slot = 0;
+		return 0;
+	}
+	mask = clip_cap - 1;
+	i = (size_t)h & mask;
+	first_tomb = 0;
+	for (size_t steps = 0; steps < clip_cap; steps++) {
+		if (clip_tab[i].state == 0) {
+			*slot = saw_tomb ? first_tomb : i;
+			return 0;
+		}
+		if (clip_tab[i].state == 2) {
+			if (!saw_tomb) {
+				first_tomb = i;
+				saw_tomb = 1;
+			}
+		} else if (clip_tab[i].hash == h && strcmp(clip_tab[i].path, path) == 0) {
+			*slot = i;
+			return 1;
+		}
+		i = (i + 1) & mask;
+	}
+	*slot = saw_tomb ? first_tomb : 0;
+	return 0;
+}
+
+static void clip_grow(void) {
+	size_t ncap = clip_cap ? clip_cap * 2 : 1024;
+	struct clip_slot *old = clip_tab;
+	size_t ocap = clip_cap;
+	size_t i;
+
+	clip_tab = calloc(ncap, sizeof *clip_tab);
+	if (clip_tab == NULL) {
+		endwin();
+		printf("%s\n", "Couldn't allocate memory!");
+		exit(1);
+	}
+	clip_cap = ncap;
+	clip_len = 0;
+	for (i = 0; i < ocap; i++) {
+		size_t slot;
+		if (old[i].state != 1)
+			continue;
+		clip_lookup(old[i].path, old[i].hash, &slot);
+		clip_tab[slot].state = 1;
+		clip_tab[slot].hash = old[i].hash;
+		clip_tab[slot].path = old[i].path;
+		clip_len++;
+	}
+	free(old);
+}
+
+static void clip_add_copy(const char *path) {
+	unsigned h;
+	size_t slot;
+
+	if (!path || !path[0])
+		return;
+	if (clip_cap == 0 || (clip_len + 1) * 10 >= clip_cap * 7)
+		clip_grow();
+	h = clip_hash(path);
+	if (clip_lookup(path, h, &slot))
+		return;
+	clip_tab[slot].state = 1;
+	clip_tab[slot].hash = h;
+	clip_tab[slot].path = strdup(path);
+	if (clip_tab[slot].path == NULL) {
+		clip_tab[slot].state = 0;
+		endwin();
+		printf("%s\n", "Couldn't allocate memory!");
+		exit(1);
+	}
+	clip_len++;
+}
+
+static void clip_load(void) {
+	FILE *f;
 	char buf[PATH_MAX];
+
+	if (clip_ready)
+		return;
+	clip_free_tab();
+	clip_ready = 1;
+	if (!clipboard_path)
+		return;
+	f = fopen(clipboard_path, "r");
+	if (f == NULL)
+		return;
+	while (fgets(buf, PATH_MAX, f)) {
+		size_t n = strlen(buf);
+		if (n && buf[n - 1] == '\n')
+			buf[n - 1] = '\0';
+		if (buf[0])
+			clip_add_copy(buf);
+	}
+	fclose(f);
+}
+
+static int clip_contains(const char *path) {
+	unsigned h;
+	size_t slot;
+	clip_load();
+	if (!path || !path[0] || clip_cap == 0)
+		return 0;
+	h = clip_hash(path);
+	return clip_lookup(path, h, &slot);
+}
+
+int checkClipboard(char *filepath) {
 	char *temp = NULL;
+	int found;
+
 	allocSize = snprintf(NULL,0,"%s", filepath);
 	temp = malloc(allocSize+1);
 	if(temp == NULL) {
@@ -788,23 +987,10 @@ int checkClipboard(char *filepath) {
 		exit(1);
 	}
 	snprintf(temp, allocSize+1, "%s", filepath);
-	temp[strlen(temp)]='\0';
-	if(f == NULL) {
-		free(temp);
-		return 0;
-	}
 	replace(temp,"\n","//");
-	while(fgets(buf, PATH_MAX, (FILE*) f)) {
-		buf[strlen(buf)-1] = '\0';
-		if(strcmp(temp,buf) == 0) {
-			free(temp);
-			fclose(f);
-			return 1;
-		}
-	}
-	fclose(f);
+	found = clip_contains(temp);
 	free(temp);
-	return 0;
+	return found;
 }
 
 void writeClipboard(char *filepath) {
@@ -816,6 +1002,8 @@ void writeClipboard(char *filepath) {
 	}
 	fprintf(f, "%s\n", filepath);
 	fclose(f);
+	if (clip_ready)
+		clip_add_copy(filepath);
 }
 
 void removeClipboard(char *filepath) {
@@ -851,34 +1039,58 @@ void removeClipboard(char *filepath) {
 		perror("Couldn't move temporary clipboard file");
 		exit(1);
 	}
+	if (clip_ready) {
+		unsigned h = clip_hash(filepath);
+		size_t slot;
+		if (clip_lookup(filepath, h, &slot) && clip_tab[slot].state == 1) {
+			free(clip_tab[slot].path);
+			clip_tab[slot].path = NULL;
+			clip_tab[slot].state = 2;
+			if (clip_len)
+				clip_len--;
+		}
+	}
 }
 
 void clearClipboard(void) {
 	/* Remove the session clipboard file so selection is fully gone */
 	if (clipboard_path)
 		remove(clipboard_path);
+	clip_free_tab();
+	clip_ready = 1;
 	selectedFiles = 0;
 }
 
-/* Mark every entry in the current directory listing (Shift+V). */
+/* Mark every entry in the current directory listing (Shift+V).
+ * One append and a hash lookup per name. The old loop re-read the
+ * clipboard file for every file, which is quadratic. */
 void selectAllFiles(char **directories, int n) {
+	FILE *f;
+	int i;
+
 	if (!directories || n <= 0)
 		return;
-	for (int i = 0; i < n; i++) {
+	clip_load();
+	f = fopen(clipboard_path, "a");
+	if (f == NULL) {
+		endwin();
+		printf("Error accessing clipboard!\n");
+		exit(1);
+	}
+	for (i = 0; i < n; i++) {
+		char path[PATH_MAX];
 		if (!directories[i])
 			continue;
-		char path[PATH_MAX];
 		if (build_path(path, sizeof path, dir, directories[i]) != 0)
 			continue;
-		if (checkClipboard(path) == 1)
+		replace(path, "\n", "//");
+		if (clip_contains(path))
 			continue;
-		char *temp = strdup(path);
-		if (!temp)
-			continue;
-		writeClipboard(replace(temp, "\n", "//"));
-		free(temp);
+		fprintf(f, "%s\n", path);
+		clip_add_copy(path);
 	}
-	setSelectionCount();
+	fclose(f);
+	selectedFiles = (int)clip_len;
 }
 
 void getParentPath(char *path) {
