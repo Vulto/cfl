@@ -70,9 +70,18 @@ Omit list is configurable in `config.h` (`JUMP_OMIT_DIRS`, e.g. `.pki`, `usr`, `
 - Images: resolution and proportion (via mediainfo when available)
 - Videos: resolution, proportion, FPS, codec, duration, size
 
+### Tabs
+Four in-process tabs, in the same spirit as nnn's contexts (not separate processes). Each tab remembers its directory, cursor, list scroll, hidden-files toggle, and whether file-info mode is on. The selection clipboard is shared, so you can mark files in one tab and paste them in another. Switching tabs clears the Überzug image and draws the new tab's preview.
+
+### Large directories
+Opening a directory reads it once and keeps the sorted list until it changes. Scrolling only draws the rows on screen, so moving around a million files costs the same as moving around a small folder. `V` marks every name in one pass. Search ranks matches when the list is short and otherwise keeps directory order, so typing in a huge folder does not sort a million rows on every key.
+
 ### Image previews
-- Überzugpp layer in the preview pane
-- **Smart clear**: when browsing images, only clear the previous layer if the new image is **smaller** or dimensions are unknown; equal/larger images splash without a full clear (faster scrolling)
+- One long-lived Überzugpp process. While keys are repeating, cfl moves the cursor and does not send a decode per file; the preview is drawn about 50 ms after the last key (`PREVIEW_IDLE_MS` in `config.h`)
+- Directory listings are cached until the directory changes. File-vs-directory is taken from `d_type` (one `stat` only when the type is unknown) instead of stating every name on every comparison
+- libmagic is loaded once. Recognized image headers skip MIME detection
+- Large images are downscaled in the background into `$XDG_CACHE_HOME/cfl/thumbs` (or `~/.cache/cfl/thumbs`) with `ffmpeg` or ImageMagick when that tool is installed. The next visit of that file sends the thumbnail. `CFL_NO_THUMB=1` disables it
+- **Smart clear**: when browsing images, only clear the previous layer if the new image is **smaller** or dimensions are unknown; equal/larger images splash without a full clear
 
 ### FreeDesktop Trash
 - **`d`** then **`g`** — trash selection (not a raw dump folder)
@@ -96,6 +105,7 @@ Then run `cfl` and press **`q`**: the shell function `cd`s to the last browsed p
 | Key | Action |
 |:---:|--------|
 | `h` `j` `k` `l` | Parent / down / up / open |
+| `1` `2` `3` `4` | Switch tab. A new tab opens in the current directory and keeps its own cursor, scroll, and hidden-files state. The status line shows the four tabs (reverse = current, underline = open). |
 | `g` `G` `T` `M` `B` | Start / end / top / mid / bottom of list |
 | `/` | Fuzzy search |
 | `J` | Jump to… |
@@ -135,6 +145,7 @@ Edit **`config.h`** then recompile:
 | `$XDG_CONFIG_HOME/cfl/lastdir` | Last dir on quit (for `cfl.sh`) |
 | `$XDG_CONFIG_HOME/cfl/scripts` | External scripts |
 | `$XDG_DATA_HOME/Trash` | FreeDesktop trash |
+| `$XDG_CACHE_HOME/cfl/thumbs` | Downscaled image previews (or `~/.cache/cfl/thumbs`) |
 
 If `$XDG_CONFIG_HOME` is unset, `$HOME/.config` is used. If `$XDG_DATA_HOME` is unset, `$HOME/.local/share` is used.
 

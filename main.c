@@ -2,18 +2,100 @@
 
 int main(int argc, char* argv[]) {
     init(argc, argv);
+    if (getenv("CFL_DUMP_LIST") != NULL) {
+        int n = listing_cached(&cache_cwd, dir);
+        int k;
+        if (n < 0) {
+            fprintf(stderr, "Couldn't open directory\n");
+            return 1;
+        }
+        for (k = 0; k < n; k++)
+            printf("%u %u %s\n", (unsigned)cache_cwd.list.not_reg[k],
+                   (unsigned)cache_cwd.list.is_link[k], cache_cwd.list.names[k]);
+        return 0;
+    }
+    if (getenv("CFL_TIME_LIST") != NULL) {
+        struct timespec a, b;
+        double ms;
+        int n;
+        long rss_kb = -1;
+        FILE *st;
+        clock_gettime(CLOCK_MONOTONIC, &a);
+        n = listing_cached(&cache_cwd, dir);
+        clock_gettime(CLOCK_MONOTONIC, &b);
+        ms = (b.tv_sec - a.tv_sec) * 1000.0 + (b.tv_nsec - a.tv_nsec) / 1e6;
+        st = fopen("/proc/self/status", "r");
+        if (st) {
+            char line[256];
+            while (fgets(line, sizeof line, st)) {
+                if (sscanf(line, "VmRSS: %ld", &rss_kb) == 1)
+                    break;
+            }
+            fclose(st);
+        }
+        if (n < 0) {
+            fprintf(stderr, "Couldn't open directory\n");
+            return 1;
+        }
+        printf("entries %d open_ms %.1f rss_kb %ld\n", n, ms, rss_kb);
+        clock_gettime(CLOCK_MONOTONIC, &a);
+        listing_cached(&cache_cwd, dir);
+        clock_gettime(CLOCK_MONOTONIC, &b);
+        ms = (b.tv_sec - a.tv_sec) * 1000.0 + (b.tv_nsec - a.tv_nsec) / 1e6;
+        printf("cache_hit_ms %.3f\n", ms);
+        return 0;
+    }
+    if (getenv("CFL_TIME_SELECT") != NULL) {
+        struct timespec a, b;
+        double ms;
+        int n = listing_cached(&cache_cwd, dir);
+        if (n < 0) {
+            fprintf(stderr, "Couldn't open directory\n");
+            return 1;
+        }
+        clock_gettime(CLOCK_MONOTONIC, &a);
+        selectAllFiles(cache_cwd.list.names, n);
+        clock_gettime(CLOCK_MONOTONIC, &b);
+        ms = (b.tv_sec - a.tv_sec) * 1000.0 + (b.tv_nsec - a.tv_nsec) / 1e6;
+        printf("select_all entries %d ms %.1f\n", n, ms);
+        clock_gettime(CLOCK_MONOTONIC, &a);
+        for (int frame = 0; frame < 100; frame++) {
+            int row;
+            int shown = n < 30 ? n : 30;
+            for (row = 0; row < shown; row++) {
+                char path[PATH_MAX];
+                if (build_path(path, sizeof path, dir, cache_cwd.list.names[row]) != 0)
+                    continue;
+                checkClipboard(path);
+            }
+        }
+        clock_gettime(CLOCK_MONOTONIC, &b);
+        ms = (b.tv_sec - a.tv_sec) * 1000.0 + (b.tv_nsec - a.tv_nsec) / 1e6;
+        printf("mark_lookup_100_frames_ms %.1f\n", ms);
+        return 0;
+    }
     cursesInit();
 
     int ch = 0;
+    int want_preview = 1;
+    int debounce_preview = 0;
 
     while(ch != KEY_ESCAPE) {
         char **directories = NULL;
-        int filled = getFiles(dir, &directories);
+        unsigned char *not_reg = NULL;
+        unsigned char *is_link = NULL;
+        int filled;
+
+        preview_housekeep();
+        filled = listing_cached(&cache_cwd, dir);
         if (filled == -1) {
             displayAlert("Couldn't open directory");
             break;
         }
         len = filled;
+        directories = cache_cwd.list.names;
+        not_reg = cache_cwd.list.not_reg;
+        is_link = cache_cwd.list.is_link;
 
         allocSize = snprintf(NULL, 0, "%s", dir);
         if (snprintf(sort_dir, sizeof sort_dir, "%s", dir) >= (int)sizeof sort_dir) {
@@ -21,24 +103,29 @@ int main(int argc, char* argv[]) {
             exit(1);
         }
 
-        if( len > 0 ) {
-            qsort(directories, len, sizeof (char*), compare);
-        }
-
         if(selection > len-1) {
             selection = len-1;
         }
+        tab_reseek_if_needed(directories, len);
+        if (selection > len - 1)
+            selection = len - 1;
+        if (selection < 0)
+            selection = 0;
 
         handleFlags(directories);
 
         getmaxyx(stdscr, maxy, maxx);
         /* Respect 1-line top + bottom margin + status bar */
         maxy = LINES - 2 * UI_MARGIN - 2;
+        tab_fix_scroll();
 
         initWindows();
         wclear(current_win);
 
         int t = 0;
+        int list_w = 0;
+        if (current_win)
+            list_w = getmaxx(current_win);
         for( i = start ; i < len ; i++, t++ ) {
             if( t == maxy -1 ) {
                 break;
@@ -50,7 +137,7 @@ int main(int argc, char* argv[]) {
             }
 
             int is_sel = (i == selection);
-            int is_marked = (checkClipboard(temp_dir) == 1);
+            int is_marked = (selectedFiles > 0 && checkClipboard(temp_dir) == 1);
 
             /* Cursor: reverse bar. Marked (v/V): dark gray. Cursor wins when both. */
             wattrset(current_win, A_NORMAL);
@@ -62,20 +149,17 @@ int main(int argc, char* argv[]) {
                 else wattron(current_win, A_DIM);
             }
 
-            if (isRegularFile(temp_dir) == 0)
+            if (not_reg && not_reg[i])
                 wattron(current_win, A_BOLD);
 
             wmove(current_win, t, 2);
 
             /* Reserve space for right-edge scrollbar inside current_win */
-            int rows, list_w;
-            getmaxyx(current_win, rows, list_w);
-            (void)rows;
             int trunc = list_w - 5;  /* left pad (2) + right bar reservation + safety */
 
             /* Symlink display: "name → destination" using unicode arrow */
             char entry_display[PATH_MAX * 2 + 32];
-            if (isSymlink(temp_dir)) {
+            if (is_link && is_link[i]) {
                 char target[PATH_MAX];
                 if (readSymlinkTarget(temp_dir, target, sizeof target) == 0) {
                     snprintf(entry_display, sizeof entry_display, "%s → %s", directories[i], target);
@@ -122,6 +206,9 @@ int main(int argc, char* argv[]) {
         getParentPath(prev_dir);
 
         char **next_directories = NULL;
+        unsigned char *next_not_reg = NULL;
+        unsigned char *next_is_link = NULL;
+        int ch_ready = 0;
         len_preview = -1;
         if (len > 0) {
             if (build_path(next_dir, sizeof next_dir, dir, directories[selection]) != 0) {
@@ -129,39 +216,64 @@ int main(int argc, char* argv[]) {
                 exit(1);
             }
 
-            len_preview = getFiles(next_dir, &next_directories);
-            if (len_preview > 0) {
-                if (snprintf(sort_dir, sizeof sort_dir, "%s", next_dir) >= (int)sizeof sort_dir) {
-                    displayAlert("Path too long");
-                    exit(1);
-                }
-                qsort(next_directories, len_preview, sizeof(char *), compare);
-            }
-        }
-
-        if (fileInfoMode) {
-            ueberzugpp_remove();
-            if (len > 0)
-                show_file_info(next_dir);
-            else if (preview_win) {
-                wclear(preview_win);
-                mvwprintw(preview_win, 1, 2, "No file selected");
-                wrefresh(preview_win);
-            }
-        } else if (len != 0) {
-            if (len_preview > -1) {
-                PreviewNextDir(next_dir, next_directories);
+            /* Regular files are not directories. Skip the failed opendir. */
+            if (not_reg && !not_reg[selection]) {
+                len_preview = -1;
             } else {
-                getPreview(next_dir, maxy, maxx / 2 + 2);
+                int nchild = listing_cached(&cache_preview, next_dir);
+                if (nchild >= 0) {
+                    len_preview = nchild;
+                    next_directories = cache_preview.list.names;
+                    next_not_reg = cache_preview.list.not_reg;
+                    next_is_link = cache_preview.list.is_link;
+                }
             }
         }
 
-        /* Draw the two right-side scrollbars. Preview bar is drawn inside its own renderers. */
+        /* Cursor moves immediately. Image work waits until keys go quiet. */
         drawFileListScrollbar();
-        refreshWindows();
+        if (current_win)
+            wrefresh(current_win);
+
+        if (want_preview && debounce_preview && PREVIEW_IDLE_MS > 0) {
+            wtimeout(current_win, PREVIEW_IDLE_MS);
+            ch = wgetch(current_win);
+            wtimeout(current_win, -1);
+            if (ch != ERR)
+                ch_ready = 1;
+        }
+        if (want_preview && !ch_ready) {
+            if (fileInfoMode) {
+                ueberzugpp_remove();
+                if (len > 0)
+                    show_file_info(next_dir);
+                else if (preview_win) {
+                    wclear(preview_win);
+                    mvwprintw(preview_win, 1, 2, "No file selected");
+                    wrefresh(preview_win);
+                }
+            } else if (len != 0) {
+                if (len_preview > -1)
+                    PreviewNextDir(next_dir, next_directories, next_not_reg, next_is_link);
+                else
+                    getPreview(next_dir, maxy, maxx / 2 + 2);
+            }
+            if (preview_win)
+                wrefresh(preview_win);
+            want_preview = 0;
+            debounce_preview = 0;
+        }
         pid_t pid = 0;
 
-        switch( ch = wgetch(current_win) ) {
+        if (!ch_ready)
+            ch = wgetch(current_win);
+
+        int sel0 = selection;
+        int hidden0 = hiddenFlag;
+        char dir0[PATH_MAX];
+        snprintf(dir0, sizeof dir0, "%s", dir);
+
+        switch (ch) {
             case KEY_RESIZE:
                 handleResize();
                 break;
@@ -188,6 +300,10 @@ int main(int argc, char* argv[]) {
             case KEY_TOP: selection = start; break;
             case KEY_BOTTOM: goBOTTOM(); break;
             case KEY_MID: goMID(); break;
+            case KEY_TAB1: switch_tab(0); break;
+            case KEY_TAB2: switch_tab(1); break;
+            case KEY_TAB3: switch_tab(2); break;
+            case KEY_TAB4: switch_tab(3); break;
             case KEY_SHELL:
                 ueberzugpp_remove(); endwin(); goShell(pid); start = 0; selection = 0; refresh(); break;
             case KEY_RENAME:
@@ -240,16 +356,15 @@ int main(int argc, char* argv[]) {
                 show_delete_search(directories, len);
                 break;
             case KEY_DIR: CreateDir(); break;
+            case KEY_UPDATE: listing_cache_invalidate(); break;
         }
 
-        for(i=0; i<(len_preview > 0 ? len_preview : 0); i++) {
-            free(next_directories[i]);
-        }
-        for(i=0; i<len; i++) {
-            free(directories[i]);
-        }
-        free(next_directories);
-        free(directories);
+        /* Held navigation skips previews; anything else redraws on the next frame.
+         * A tab switch already cleared the image; draw the new one immediately. */
+        want_preview = 1;
+        debounce_preview = (selection != sel0 || hiddenFlag != hidden0 || strcmp(dir, dir0) != 0);
+        if (ch == KEY_TAB1 || ch == KEY_TAB2 || ch == KEY_TAB3 || ch == KEY_TAB4)
+            debounce_preview = 0;
     }
 
     WrappeUp();

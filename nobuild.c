@@ -19,15 +19,39 @@
                 "-Wunused-variable",        \
                 "-std=c23",                 \
                 "-O0",                      \
-                "-D_POSIX_C_SOURCE=200809L"
+                "-D_POSIX_C_SOURCE=200809L", \
+                "-D_DEFAULT_SOURCE",        \
+                "-D_XOPEN_SOURCE=600",      \
+                "-I/usr/include/ncursesw"
 
 #define OLD "c.old"
-
-#define LIBS "-lncursesw", "-lmagic"
 
 char *cc(void) {
     char *result = getenv("CC");
     return result ? result : "cc";
+}
+
+/* Gentoo ships libtinfow; Debian/Ubuntu ship libtinfo. Probe once. */
+static const char *tinfo_link_flag(void) {
+    static const char *flag = NULL;
+    const char *cands[] = {"-ltinfow", "-ltinfo", NULL};
+    char cmd[512];
+    int i;
+
+    if (flag)
+        return flag;
+    for (i = 0; cands[i]; i++) {
+        snprintf(cmd, sizeof cmd,
+                 "echo 'int main(void){return 0;}' | %s -x c - -o /tmp/cfl-tinfo-probe %s >/dev/null 2>&1",
+                 cc(), cands[i]);
+        if (system(cmd) == 0) {
+            unlink("/tmp/cfl-tinfo-probe");
+            flag = cands[i];
+            return flag;
+        }
+    }
+    flag = "-ltinfo";
+    return flag;
 }
 
 void Compile(void) {
@@ -37,7 +61,7 @@ void Compile(void) {
 }
 
 void Link(void) {
-    CMD(cc(), "-o", BIN, MAINOBJ, LIBS);
+    CMD(cc(), "-o", BIN, MAINOBJ, "-lncursesw", tinfo_link_flag(), "-lmagic");
     return;
 }
 

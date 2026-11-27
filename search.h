@@ -6,6 +6,9 @@
 
 #define SEARCH_MAX_INPUT 128
 #define SEARCH_FILT_CAP  128
+/* Ranking every match is fine for a short list. Past this, keep scan order
+ * so a million-file directory stays responsive while typing. */
+#define SEARCH_RANK_MAX  4096
 
 typedef struct {
     int *indices;
@@ -124,14 +127,16 @@ static void search_filt_apply(search_filt *f, char **files, int n, const char *q
     search_filt_clear(f);
     if (!q || q[0] == '\0') {
         search_filt_fill_all(f, n);
-        search_filt_sort_short(f, files, NULL);
+        if (f->count > 1 && f->count <= SEARCH_RANK_MAX)
+            search_filt_sort_short(f, files, NULL);
         return;
     }
     for (int i = 0; i < n; i++) {
         if (files[i] && search_strcasestr(files[i], q))
             search_filt_push(f, i);
     }
-    search_filt_sort_short(f, files, q);
+    if (f->count > 1 && f->count <= SEARCH_RANK_MAX)
+        search_filt_sort_short(f, files, q);
 }
 
 /* Refine when the user appended a character. Returns 1 on success. */
@@ -148,7 +153,8 @@ static int search_filt_refine(search_filt *f, char **files, const char *q) {
     }
     free(f->indices);
     *f = newf;
-    search_filt_sort_short(f, files, q);
+    if (f->count > 1 && f->count <= SEARCH_RANK_MAX)
+        search_filt_sort_short(f, files, q);
     return 1;
 }
 
@@ -305,26 +311,21 @@ static void search_draw_preview(char **files, search_filt *filt, int sel,
         return;
     }
 
-    /* Directory → list contents; file → text/hex/image preview */
+    /* Directory → list contents; file → text/hex/image preview.
+     * The snapshot is owned by the preview cache (do not free it). */
     if (isRegularFile(path) == 0) {
+        int filled = listing_cached(&cache_preview, path);
         ueberzugpp_remove();
-        int filled = getFiles(path, preview_listing);
         if (filled < 0) {
-            *preview_n = 0;
             wmove(preview_win, 1, 2);
             wprintw(preview_win, "Cannot open directory");
             wrefresh(preview_win);
             return;
         }
-        *preview_n = filled;
         len_preview = filled;
         if (filled > 0) {
-            char saved_sort[PATH_MAX];
-            snprintf(saved_sort, sizeof saved_sort, "%s", sort_dir);
-            if (snprintf(sort_dir, sizeof sort_dir, "%s", path) < (int)sizeof sort_dir)
-                qsort(*preview_listing, (size_t)filled, sizeof(char *), compare);
-            snprintf(sort_dir, sizeof sort_dir, "%s", saved_sort);
-            PreviewNextDir(path, *preview_listing);
+            PreviewNextDir(path, cache_preview.list.names,
+                           cache_preview.list.not_reg, cache_preview.list.is_link);
         } else {
             wmove(preview_win, 1, 2);
             wprintw(preview_win, "Empty directory");
